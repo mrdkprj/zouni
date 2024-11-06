@@ -230,6 +230,7 @@ dependencies = [
  "gio",
  "once_cell",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
