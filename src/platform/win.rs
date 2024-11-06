@@ -14,7 +14,7 @@ use windows::{
     core::{Error, HRESULT, PCWSTR},
     Win32::{
         Foundation::{BOOL, HANDLE},
-        Storage::FileSystem::{CopyFileExW, DeleteFileW, LPPROGRESS_ROUTINE_CALLBACK_REASON},
+        Storage::FileSystem::{CopyFileExW, DeleteFileW, GetFileAttributesW, LPPROGRESS_ROUTINE_CALLBACK_REASON},
         System::{
             Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED},
             WindowsProgramming::{COPY_FILE_ALLOW_DECRYPTED_DESTINATION, COPY_FILE_COPY_SYMLINK},
@@ -26,6 +26,7 @@ use windows::{
 static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, u32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 const PROGRESS_CANCEL: u32 = 1;
+const FILE_NO_EXISTS: u32 = 4294967295;
 const CANCEL_ERROR_CODE: HRESULT = HRESULT::from_win32(1235);
 
 struct ProgressData<'a> {
@@ -73,7 +74,7 @@ fn inner_mv(source_file: String, dest_file: String, callback: Option<&mut dyn Fn
         CopyFileExW(to_file_path(source_file), to_file_path(dest_file), Some(move_progress), Some(data as _), Some(&mut BOOL(1)), COPY_FILE_ALLOW_DECRYPTED_DESTINATION | COPY_FILE_COPY_SYMLINK)
     } {
         Ok(_) => after_copy(source_file_fallback, dest_file_fallback)?,
-        Err(e) => handel_error(e, source_file_fallback, false)?,
+        Err(e) => handel_error(e, source_file_fallback, dest_file_fallback, false)?,
     };
 
     Ok(())
@@ -121,7 +122,7 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
             CopyFileExW(to_file_path_str(source_file), to_file_path_str(dest_file), Some(move_files_progress), Some(data as _), None, COPY_FILE_ALLOW_DECRYPTED_DESTINATION | COPY_FILE_COPY_SYMLINK)
         } {
             Ok(_) => after_copy(source_file_fallback, dest_file_fallback)?,
-            Err(e) => handel_error(e, source_file_fallback, true)?,
+            Err(e) => handel_error(e, source_file_fallback, dest_file_fallback, true)?,
         };
 
         if !done {
@@ -138,12 +139,18 @@ fn after_copy(source_file: String, _dest_file: String) -> Result<bool, String> {
     Ok(true)
 }
 
-fn handel_error(e: Error, file: String, treat_cancel_as_error: bool) -> Result<bool, String> {
-    if e.code() != CANCEL_ERROR_CODE {
-        return Err(format!("file:{}, message:{}", file, e.message()));
+fn handel_error(e: Error, source: String, dest: String, treat_cancel_as_error: bool) -> Result<bool, String> {
+    let dest_file_exists = unsafe { GetFileAttributesW(to_file_path_str(&dest)) } != FILE_NO_EXISTS;
+
+    if dest_file_exists {
+        unsafe { DeleteFileW(to_file_path_str(&dest)) }.map_err(|e| e.message())?;
     }
 
-    if treat_cancel_as_error && e.code() != CANCEL_ERROR_CODE {
+    if e.code() != CANCEL_ERROR_CODE {
+        return Err(format!("File: {}, Message: {}", source, e.message()));
+    }
+
+    if treat_cancel_as_error && e.code() == CANCEL_ERROR_CODE {
         return Ok(false);
     }
 

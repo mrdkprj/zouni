@@ -59,18 +59,9 @@ fn inner_move(source_file: String, dest_file: String, callback: Option<&mut dyn 
     };
 
     match source.copy(&dest, FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Some(&cancellable_token), callback) {
-        Ok(_) => {
-            source.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-        }
-        Err(e) => {
-            if dest.query_exists(Cancellable::NONE) {
-                dest.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-            }
-            if !e.matches(IOErrorEnum::Cancelled) {
-                return Err(e.message().to_string());
-            }
-        }
-    }
+        Ok(_) => after_copy(&source)?,
+        Err(e) => handel_error(e, &source, &dest, true)?,
+    };
 
     Ok(())
 }
@@ -131,25 +122,49 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
             Err(unsafe { from_glib_full(error) })
         };
 
-        match result {
-            Ok(_) => source.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?,
-            Err(e) => {
-                if dest.query_exists(Cancellable::NONE) {
-                    dest.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-                }
+        let done = match result {
+            Ok(_) => after_copy(source)?,
+            Err(e) => handel_error(e, source, dest, true)?,
+        };
 
-                if !e.matches(IOErrorEnum::Cancelled) {
-                    return Err(e.message().to_string());
-                }
-
-                if e.matches(IOErrorEnum::Cancelled) {
-                    break;
-                }
-            }
+        if !done {
+            break;
         }
     }
 
     Ok(())
+}
+
+fn after_copy(source: &File) -> Result<bool, String> {
+    source.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+
+    Ok(true)
+}
+
+fn handel_error(e: Error, source: &File, dest: &File, treat_cancel_as_error: bool) -> Result<bool, String> {
+    if dest.query_exists(Cancellable::NONE) {
+        dest.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+    }
+
+    if !e.matches(IOErrorEnum::Cancelled) {
+        return Err(format!("File: {}, Message: {}", source, e.message().to_string()));
+    }
+
+    if treat_cancel_as_error && e.matches(IOErrorEnum::Cancelled) {
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
+fn clean_up(cancel_id: Option<u32>) {
+    if let Ok(mut tokens) = CANCELLABLES.try_lock() {
+        if let Some(id) = cancel_id {
+            if tokens.get(&id).is_some() {
+                tokens.remove(&id);
+            }
+        }
+    }
 }
 
 unsafe extern "C" fn progress_callback(current_num_bytes: i64, total_num_bytes: i64, userdata: gpointer) {
@@ -182,16 +197,6 @@ pub(crate) fn cancel(id: u32) -> bool {
     }
 
     false
-}
-
-fn clean_up(cancel_id: Option<u32>) {
-    if let Ok(mut tokens) = CANCELLABLES.try_lock() {
-        if let Some(id) = cancel_id {
-            if tokens.get(&id).is_some() {
-                tokens.remove(&id);
-            }
-        }
-    }
 }
 
 pub(crate) fn trash(file: String) -> Result<(), String> {
