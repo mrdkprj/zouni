@@ -1,12 +1,13 @@
+use crate::{FileAttribute, Volume};
 use gio::{
     ffi::{g_file_copy, G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
     glib::{
         ffi::{gpointer, GFALSE},
         translate::{from_glib_full, ToGlibPtr},
-        Error,
+        DateTime, Error,
     },
-    prelude::{CancellableExt, FileExt},
-    Cancellable, File, FileCopyFlags, IOErrorEnum,
+    prelude::{CancellableExt, DriveExt, FileExt, MountExt, VolumeExt, VolumeMonitorExt},
+    Cancellable, File, FileCopyFlags, FileQueryInfoFlags, FileType, IOErrorEnum, VolumeMonitor,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -22,6 +23,54 @@ use std::{
 static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+pub fn list_volumes() -> Result<Vec<Volume>, String> {
+    let _ = gtk::init();
+    let mut volumes = Vec::new();
+    let monitor = VolumeMonitor::get();
+
+    for drive in monitor.connected_drives() {
+        let mount_point = if drive.has_volumes() {
+            drive.volumes().first().unwrap().get_mount().map(|m| m.default_location().to_string()).unwrap_or_else(|| String::new())
+        } else {
+            String::new()
+        };
+
+        let volume_label = drive.name().to_string();
+
+        volumes.push(Volume {
+            mount_point,
+            volume_label,
+        });
+    }
+
+    Ok(volumes)
+}
+
+pub fn get_file_attribute(file_path: &str) -> Result<FileAttribute, String> {
+    let file = File::for_parse_name(file_path);
+    let info = file.query_info("standard::*", FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
+
+    Ok(FileAttribute {
+        directory: info.file_type() == FileType::Directory,
+        read_only: false,
+        hidden: info.is_hidden(),
+        system: info.file_type() == FileType::Special,
+        device: info.file_type() == FileType::Mountable,
+        ctime: info.creation_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
+        mtime: info.modification_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
+        atime: info.access_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
+        size: info.size() as u64,
+    })
+}
+
+pub fn open_file_property(_window_handle: isize, _file_path: String) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn open_path(_window_handle: isize, file_path: String) -> Result<(), String> {
+    gio::AppInfo::launch_default_for_uri(&file_path, gio::AppLaunchContext::NONE).map_err(|e| e.message().to_string())
+}
+
 struct BulkProgressData<'a> {
     callback: Option<&'a mut dyn FnMut(i64, i64)>,
     total: i64,
@@ -29,7 +78,7 @@ struct BulkProgressData<'a> {
     in_process: bool,
 }
 
-pub(crate) fn reserve_cancellable() -> u32 {
+pub fn reserve_cancellable() -> u32 {
     let id = UUID.fetch_add(1, Ordering::Relaxed);
 
     let mut tokens = CANCELLABLES.lock().unwrap();
@@ -39,7 +88,7 @@ pub(crate) fn reserve_cancellable() -> u32 {
     id
 }
 
-pub(crate) fn mv(source_file: String, dest_file: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv(source_file: String, dest_file: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_move(source_file, dest_file, callback, cancel_id);
     clean_up(cancel_id);
     result
@@ -66,7 +115,7 @@ fn inner_move(source_file: String, dest_file: String, callback: Option<&mut dyn 
     Ok(())
 }
 
-pub(crate) fn mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_mv_bulk(source_files, dest_dir, callback, cancel_id);
     clean_up(cancel_id);
     result
@@ -188,7 +237,7 @@ unsafe extern "C" fn progress_callback(current_num_bytes: i64, total_num_bytes: 
     }
 }
 
-pub(crate) fn cancel(id: u32) -> bool {
+pub fn cancel(id: u32) -> bool {
     if let Ok(tokens) = CANCELLABLES.try_lock() {
         if let Some(token) = tokens.get(&id) {
             token.cancel();
@@ -199,7 +248,7 @@ pub(crate) fn cancel(id: u32) -> bool {
     false
 }
 
-pub(crate) fn trash(file: String) -> Result<(), String> {
+pub fn trash(file: String) -> Result<(), String> {
     let file = File::for_parse_name(&file);
     file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
 }
