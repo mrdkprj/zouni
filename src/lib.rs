@@ -1,4 +1,4 @@
-pub mod platform;
+mod platform;
 #[cfg(target_os = "linux")]
 pub use platform::linux::*;
 #[cfg(target_os = "windows")]

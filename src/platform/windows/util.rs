@@ -1,8 +1,12 @@
 use std::os::windows::ffi::OsStrExt;
 use windows::{
     core::PCWSTR,
-    Win32::{Foundation::MAX_PATH, Globalization::lstrlenW},
+    Win32::{
+        Foundation::{GlobalFree, HGLOBAL, MAX_PATH},
+        Globalization::lstrlenW,
+    },
 };
+use windows_core::HRESULT;
 
 pub(crate) fn decode_wide(wide: &[u16]) -> String {
     let len = unsafe { lstrlenW(PCWSTR::from_raw(wide.as_ptr())) } as usize;
@@ -24,5 +28,18 @@ pub(crate) fn prefixed(path: &str) -> String {
         }
     } else {
         path.to_string()
+    }
+}
+
+pub(crate) fn global_free(hglobal: HGLOBAL) -> Result<(), String> {
+    match unsafe { GlobalFree(hglobal) } {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            if err.code() == HRESULT(0x00000000) {
+                Ok(())
+            } else {
+                Err(err.message())
+            }
+        }
     }
 }
