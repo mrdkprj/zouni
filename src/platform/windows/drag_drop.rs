@@ -6,7 +6,7 @@ use windows::{
     Win32::{
         Foundation::*,
         System::{
-            Com::{CoInitializeEx, IDataObject, COINIT_APARTMENTTHREADED, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
+            Com::{CoInitializeEx, CoUninitialize, IDataObject, COINIT_APARTMENTTHREADED, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
             Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
             Ole::{DoDragDrop, IDropSource, IDropSource_Impl, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
             SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS},
@@ -100,6 +100,8 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
     };
 
     let _ = unsafe { DoDragDrop(&data_object, &drop_source, effects, &mut effects) };
+
+    unsafe { CoUninitialize() };
 
     Ok(())
 }

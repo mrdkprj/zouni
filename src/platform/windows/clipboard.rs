@@ -10,12 +10,12 @@ use windows::Win32::{
     UI::Shell::{DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, DROPFILES, HDROP},
 };
 
-pub fn is_text_availabel() -> bool {
+pub fn is_text_available() -> bool {
     unsafe { IsClipboardFormatAvailable(CF_TEXT.0 as u32).is_ok() }
 }
 
 pub fn read_text(window_handle: isize) -> Result<String, String> {
-    if !is_text_availabel() {
+    if !is_text_available() {
         return Ok(String::new());
     }
 

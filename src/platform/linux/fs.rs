@@ -40,10 +40,45 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
         volumes.push(Volume {
             mount_point,
             volume_label,
+            available_units: 0,
+            total_units: 0,
         });
     }
 
     Ok(volumes)
+}
+
+pub fn readdir(directory: String, recursive: bool) -> Result<Vec<Dirent>, String> {
+    let path = PathBuf::from(directory);
+    if !path.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    try_readdir(path, &mut entries, recursive).unwrap();
+
+    Ok(entries)
+}
+
+fn try_readdir(dir: PathBuf, entries: &mut Vec<Dirent>, recursive: bool) -> std::io::Result<&mut Vec<Dirent>> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.path().is_dir() && recursive {
+            try_readdir(entry.path(), entries, recursive)?;
+        }
+
+        let path = entry.path();
+        entries.push(Dirent {
+            is_directory: path.is_dir(),
+            is_file: path.is_file(),
+            is_symbolic_link: path.is_symlink(),
+            name: entry.file_name().to_string_lossy().to_string(),
+            parent_path: path.parent().unwrap_or(Path::new("")).to_string_lossy().to_string(),
+            full_path: entry.path().to_string_lossy().to_string(),
+        });
+    }
+
+    Ok(entries)
 }
 
 pub fn get_file_attribute(file_path: &str) -> Result<FileAttribute, String> {
@@ -61,14 +96,6 @@ pub fn get_file_attribute(file_path: &str) -> Result<FileAttribute, String> {
         atime: info.access_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
         size: info.size() as u64,
     })
-}
-
-pub fn open_file_property(_window_handle: isize, _file_path: String) -> Result<(), String> {
-    Ok(())
-}
-
-pub fn open_path(_window_handle: isize, file_path: String) -> Result<(), String> {
-    gio::AppInfo::launch_default_for_uri(&file_path, gio::AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
 struct BulkProgressData<'a> {
@@ -115,7 +142,7 @@ fn inner_move(source_file: String, dest_file: String, callback: Option<&mut dyn 
     Ok(())
 }
 
-pub fn mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv_all(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_mv_bulk(source_files, dest_dir, callback, cancel_id);
     clean_up(cancel_id);
     result
@@ -246,9 +273,4 @@ pub fn cancel(id: u32) -> bool {
     }
 
     false
-}
-
-pub fn trash(file: String) -> Result<(), String> {
-    let file = File::for_parse_name(&file);
-    file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
 }

@@ -23,7 +23,6 @@ pub(crate) fn prefixed(path: &str) -> String {
         if let Some(stripped) = path.strip_prefix("\\\\") {
             format!("\\\\?\\UNC\\{}", stripped)
         } else {
-            println!("yest long");
             format!("\\\\?\\{}", path)
         }
     } else {

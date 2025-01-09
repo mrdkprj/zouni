@@ -1,11 +1,11 @@
 use super::util::{decode_wide, encode_wide, prefixed};
-use crate::{FileAttribute, Volume};
+use crate::{Dirent, FileAttribute, Volume};
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
     ffi::c_void,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU32, Ordering},
         Mutex,
@@ -14,14 +14,13 @@ use std::{
 use windows::{
     core::{Error, HRESULT, PCWSTR},
     Win32::{
-        Foundation::{HANDLE, HWND, MAX_PATH},
+        Foundation::{HANDLE, MAX_PATH},
         Storage::FileSystem::{
-            DeleteFileW, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetFileAttributesW, GetVolumeInformationW,
-            GetVolumePathNamesForVolumeNameW, MoveFileExW, MoveFileWithProgressW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
-            FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, LPPROGRESS_ROUTINE_CALLBACK_REASON, MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, WIN32_FIND_DATAW,
+            DeleteFileW, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW,
+            GetFileAttributesW, GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, MoveFileExW, MoveFileWithProgressW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
+            FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, LPPROGRESS_ROUTINE_CALLBACK_REASON, MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING,
+            MOVEFILE_WRITE_THROUGH, WIN32_FIND_DATAW,
         },
-        System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED},
-        UI::Shell::{FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName, ShellExecuteExW, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW},
     },
 };
 
@@ -49,10 +48,24 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
 
         let volume_label = decode_wide(&volume_label_ptr);
 
-        volumes.push(Volume {
-            mount_point,
-            volume_label,
-        });
+        if mount_point.is_empty() {
+            volumes.push(Volume {
+                mount_point,
+                volume_label,
+                available_units: 0,
+                total_units: 0,
+            });
+        } else {
+            let mut available = 0;
+            let mut total = 0;
+            unsafe { GetDiskFreeSpaceExW(PCWSTR::from_raw(drive_paths.as_ptr()), None, Some(&mut total), Some(&mut available)).map_err(|e| e.message()) }?;
+            volumes.push(Volume {
+                mount_point,
+                volume_label,
+                available_units: available,
+                total_units: total,
+            });
+        }
 
         volume_name = vec![0u16; MAX_PATH as usize];
         let next = unsafe { FindNextVolumeW(handle, &mut volume_name) };
@@ -72,20 +85,10 @@ pub fn get_file_attribute(file_path: &str) -> Result<FileAttribute, String> {
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-    let attributes = data.dwFileAttributes;
+    let file_attribute = get_attributes(&data);
     unsafe { FindClose(handle).map_err(|e| e.message()) }?;
 
-    Ok(FileAttribute {
-        directory: attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0,
-        read_only: attributes & FILE_ATTRIBUTE_READONLY.0 != 0,
-        hidden: attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0,
-        system: attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0,
-        device: attributes & FILE_ATTRIBUTE_DEVICE.0 != 0,
-        ctime: to_msecs(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
-        mtime: to_msecs(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
-        atime: to_msecs(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
-        size: (data.nFileSizeLow as u64) | ((data.nFileSizeHigh as u64) << 32),
-    })
+    Ok(file_attribute)
 }
 
 fn to_msecs(low: u32, high: u32) -> f64 {
@@ -96,40 +99,103 @@ fn to_msecs(low: u32, high: u32) -> f64 {
     milliseconds - windows_epoch
 }
 
-pub fn open_path(window_handle: isize, file_path: String) -> Result<(), String> {
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-
-    let wide_verb = encode_wide("open");
-    let wide_path = encode_wide(file_path);
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        hwnd: HWND(window_handle as _),
-        lpVerb: PCWSTR::from_raw(wide_verb.as_ptr()),
-        fMask: SEE_MASK_INVOKEIDLIST,
-        lpFile: PCWSTR::from_raw(wide_path.as_ptr()),
-        ..Default::default()
-    };
-    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
-
-    Ok(())
+#[derive(PartialEq)]
+enum FileType {
+    Device,
+    Link,
+    Dir,
+    File,
 }
 
-pub fn open_file_property(window_handle: isize, file_path: String) -> Result<(), String> {
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+fn get_file_type(attr: u32) -> FileType {
+    if attr & FILE_ATTRIBUTE_DEVICE.0 != 0 {
+        return FileType::Device;
+    }
+    if attr & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        return FileType::Link;
+    }
+    if attr & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+        return FileType::Dir;
+    }
 
-    let wide_verb = encode_wide("properties");
-    let wide_path = encode_wide(file_path);
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        hwnd: HWND(window_handle as _),
-        lpVerb: PCWSTR::from_raw(wide_verb.as_ptr()),
-        fMask: SEE_MASK_INVOKEIDLIST,
-        lpFile: PCWSTR::from_raw(wide_path.as_ptr()),
-        ..Default::default()
-    };
-    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
+    FileType::File
+}
 
-    Ok(())
+fn get_attributes(data: &WIN32_FIND_DATAW) -> FileAttribute {
+    let attributes = data.dwFileAttributes;
+    let file_type = get_file_type(attributes);
+    FileAttribute {
+        is_directory: file_type == FileType::Dir,
+        is_read_only: attributes & FILE_ATTRIBUTE_READONLY.0 != 0,
+        is_hidden: attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0,
+        is_system: attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0,
+        is_device: file_type == FileType::Device,
+        is_file: file_type == FileType::File,
+        is_symbolic_link: file_type == FileType::Link,
+        ctime: to_msecs(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
+        mtime: to_msecs(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
+        atime: to_msecs(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
+        size: (data.nFileSizeLow as u64) | ((data.nFileSizeHigh as u64) << 32),
+    }
+}
+
+pub fn readdir(directory: String, recursive: bool) -> Result<Vec<Dirent>, String> {
+    let mut entries = Vec::new();
+
+    let mut path = PathBuf::from(directory.clone());
+    if !path.is_dir() {
+        return Ok(entries);
+    }
+    path.push("*");
+
+    let wide = encode_wide(prefixed(path.to_str().unwrap()));
+    let path = PCWSTR::from_raw(wide.as_ptr());
+    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+    let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
+
+    if handle.is_invalid() {
+        return Ok(entries);
+    }
+
+    try_readdir(handle, directory.clone(), &mut entries, recursive).unwrap();
+
+    Ok(entries)
+}
+
+fn try_readdir(handle: HANDLE, parent: String, entries: &mut Vec<Dirent>, recursive: bool) -> Result<&mut Vec<Dirent>, String> {
+    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+
+    while unsafe { FindNextFileW(handle, &mut data) }.is_ok() {
+        let name = decode_wide(&data.cFileName);
+        if name == "." || name == ".." {
+            continue;
+        }
+
+        let mut full_path = PathBuf::from(&parent);
+        full_path.push(name.clone());
+
+        entries.push(Dirent {
+            name: name.clone(),
+            parent_path: parent.clone(),
+            full_path: full_path.to_string_lossy().to_string(),
+            attributes: get_attributes(&data),
+        });
+
+        if data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 && recursive {
+            let mut next_path = PathBuf::from(&parent);
+            next_path.push(name);
+            let next_parent = next_path.to_string_lossy().to_string();
+            next_path.push("*");
+            let wide = encode_wide(prefixed(next_path.to_str().unwrap()));
+            let path = PCWSTR::from_raw(wide.as_ptr());
+            let next_handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
+            try_readdir(next_handle, next_parent, entries, recursive)?;
+        }
+    }
+
+    unsafe { FindClose(handle).map_err(|e| e.message()) }?;
+
+    Ok(entries)
 }
 
 struct ProgressData<'a> {
@@ -192,7 +258,7 @@ fn inner_mv(source_file: String, dest_file: String, callback: Option<&mut dyn Fn
     Ok(())
 }
 
-pub fn mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv_all(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_mv_bulk(source_files, dest_dir, callback, cancel_id);
     clean_up(cancel_id);
     result
@@ -394,19 +460,4 @@ pub fn cancel(id: u32) -> bool {
         }
     }
     false
-}
-
-pub fn trash(file: String) -> Result<(), String> {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
-        let op: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message())?;
-        op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message())?;
-        let file_wide = encode_wide(prefixed(&file));
-        let shell_item: IShellItem = SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message())?;
-        op.DeleteItem(&shell_item, None).map_err(|e| e.message())?;
-        op.PerformOperations().map_err(|e| e.message())?;
-    }
-
-    Ok(())
 }
