@@ -20,6 +20,7 @@ pub fn open_path(window_handle: isize, file_path: String) -> Result<(), String> 
         lpVerb: PCWSTR::from_raw(wide_verb.as_ptr()),
         fMask: SEE_MASK_INVOKEIDLIST,
         lpFile: PCWSTR::from_raw(wide_path.as_ptr()),
+        nShow: 1,
         ..Default::default()
     };
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
