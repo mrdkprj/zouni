@@ -47,4 +47,5 @@ pub struct Dirent {
     pub parent_path: String,
     pub full_path: String,
     pub attributes: FileAttribute,
+    pub mime_type: String,
 }

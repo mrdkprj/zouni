@@ -1,4 +1,4 @@
-use crate::{FileAttribute, Volume};
+use crate::{Dirent, FileAttribute, Volume};
 use gio::{
     ffi::{g_file_copy, G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
     glib::{
@@ -48,54 +48,69 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-pub fn readdir(directory: String, recursive: bool) -> Result<Vec<Dirent>, String> {
-    let path = PathBuf::from(directory);
-    if !path.is_dir() {
+pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
+    if !directory.as_ref().is_dir() {
         return Ok(Vec::new());
     }
 
     let mut entries = Vec::new();
-    try_readdir(path, &mut entries, recursive).unwrap();
+    try_readdir(directory, &mut entries, recursive, with_mime_type).map_err(|e| e)?;
 
     Ok(entries)
 }
 
-fn try_readdir(dir: PathBuf, entries: &mut Vec<Dirent>, recursive: bool) -> std::io::Result<&mut Vec<Dirent>> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+fn try_readdir<P: AsRef<Path>>(dir: P, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
+    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
         if entry.path().is_dir() && recursive {
-            try_readdir(entry.path(), entries, recursive)?;
+            try_readdir(entry.path(), entries, recursive, with_mime_type)?;
         }
 
         let path = entry.path();
+        let mime_type = if with_mime_type {
+            get_mime_type(&path)?
+        } else {
+            String::new()
+        };
+
         entries.push(Dirent {
-            is_directory: path.is_dir(),
-            is_file: path.is_file(),
-            is_symbolic_link: path.is_symlink(),
             name: entry.file_name().to_string_lossy().to_string(),
             parent_path: path.parent().unwrap_or(Path::new("")).to_string_lossy().to_string(),
             full_path: entry.path().to_string_lossy().to_string(),
+            attributes: get_file_attribute(path.to_str().unwrap()).map_err(|e| e)?,
+            mime_type,
         });
     }
 
     Ok(entries)
 }
 
-pub fn get_file_attribute(file_path: &str) -> Result<FileAttribute, String> {
-    let file = File::for_parse_name(file_path);
+pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
     let info = file.query_info("standard::*", FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
 
     Ok(FileAttribute {
-        directory: info.file_type() == FileType::Directory,
-        read_only: false,
-        hidden: info.is_hidden(),
-        system: info.file_type() == FileType::Special,
-        device: info.file_type() == FileType::Mountable,
+        is_directory: info.file_type() == FileType::Directory,
+        is_read_only: false,
+        is_hidden: info.is_hidden(),
+        is_system: info.file_type() == FileType::Special,
+        is_device: info.file_type() == FileType::Mountable,
+        is_file: info.file_type() == FileType::Regular,
+        is_symbolic_link: info.file_type() == FileType::SymbolicLink,
         ctime: info.creation_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
         mtime: info.modification_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
         atime: info.access_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
         size: info.size() as u64,
     })
+}
+
+pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
+    if !file_path.as_ref().is_file() {
+        return Ok(String::new());
+    }
+
+    let (ctype, _) = gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap()), &[0]);
+    Ok(ctype.to_string())
 }
 
 struct BulkProgressData<'a> {
@@ -115,15 +130,15 @@ pub fn reserve_cancellable() -> u32 {
     id
 }
 
-pub fn mv(source_file: String, dest_file: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv<P: AsRef<Path>, P2: AsRef<Path>>(source_file: P, dest_file: P2, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_move(source_file, dest_file, callback, cancel_id);
     clean_up(cancel_id);
     result
 }
 
-fn inner_move(source_file: String, dest_file: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
-    let source = File::for_parse_name(&source_file);
-    let dest = File::for_parse_name(&dest_file);
+fn inner_move<P: AsRef<Path>, P2: AsRef<Path>>(source_file: P, dest_file: P2, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+    let source = File::for_parse_name(source_file.as_ref().to_str().unwrap());
+    let dest = File::for_parse_name(dest_file.as_ref().to_str().unwrap());
 
     let cancellable_token = if let Some(id) = cancel_id {
         {
@@ -142,16 +157,16 @@ fn inner_move(source_file: String, dest_file: String, callback: Option<&mut dyn 
     Ok(())
 }
 
-pub fn mv_all(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv_all<P: AsRef<Path>, P2: AsRef<Path>>(source_files: Vec<P>, dest_dir: P2, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_mv_bulk(source_files, dest_dir, callback, cancel_id);
     clean_up(cancel_id);
     result
 }
 
-fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
-    let sources: Vec<File> = source_files.iter().map(|f| File::for_parse_name(&f)).collect();
-    let dest_dir_path = Path::new(&dest_dir);
-    if dest_dir_path.is_file() {
+fn inner_mv_bulk<P: AsRef<Path>, P2: AsRef<Path>>(source_files: Vec<P>, dest_dir: P2, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+    let sources: Vec<File> = source_files.iter().map(|f| File::for_parse_name(f.as_ref().to_str().unwrap())).collect();
+
+    if dest_dir.as_ref().is_file() {
         return Err("Destination is file".to_string());
     }
 
@@ -161,10 +176,9 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
     for source_file in source_files {
         let metadata = fs::metadata(&source_file).unwrap();
         total += metadata.len() as i64;
-        let path = Path::new(&source_file);
-        let name = path.file_name().unwrap();
-        let dest_file = dest_dir_path.join(name);
-        dest_files.push(File::for_parse_name(dest_file.to_string_lossy().as_ref()));
+        let name = source_file.as_ref().file_name().unwrap();
+        let dest_file = dest_dir.as_ref().join(name);
+        dest_files.push(File::for_parse_name(dest_file.to_str().unwrap()));
     }
 
     let cancellable_token = if let Some(id) = cancel_id {

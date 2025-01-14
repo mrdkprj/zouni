@@ -4,6 +4,7 @@ use windows::{
     Win32::{
         Foundation::{GlobalFree, HGLOBAL, MAX_PATH},
         Globalization::lstrlenW,
+        System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
     },
 };
 use windows_core::HRESULT;
@@ -18,15 +19,15 @@ pub(crate) fn encode_wide(string: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
     string.as_ref().encode_wide().chain(std::iter::once(0)).collect()
 }
 
-pub(crate) fn prefixed(path: &str) -> String {
-    if path.len() >= MAX_PATH as usize {
-        if let Some(stripped) = path.strip_prefix("\\\\") {
+pub(crate) fn prefixed(path: impl AsRef<std::ffi::OsStr>) -> String {
+    if path.as_ref().len() >= MAX_PATH as usize {
+        if let Some(stripped) = path.as_ref().to_str().unwrap().strip_prefix("\\\\") {
             format!("\\\\?\\UNC\\{}", stripped)
         } else {
-            format!("\\\\?\\{}", path)
+            format!("\\\\?\\{}", path.as_ref().to_str().unwrap())
         }
     } else {
-        path.to_string()
+        path.as_ref().to_string_lossy().to_string()
     }
 }
 
@@ -40,5 +41,21 @@ pub(crate) fn global_free(hglobal: HGLOBAL) -> Result<(), String> {
                 Err(err.message())
             }
         }
+    }
+}
+
+pub(crate) struct ComGuard;
+
+impl ComGuard {
+    /// Initializes COM for the current thread.
+    pub fn new() -> Self {
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        Self
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        unsafe { CoUninitialize() };
     }
 }

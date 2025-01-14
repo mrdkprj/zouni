@@ -1,4 +1,4 @@
-use super::util::{decode_wide, encode_wide, prefixed};
+use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
 use crate::{Dirent, FileAttribute, Volume};
 use once_cell::sync::Lazy;
 use std::{
@@ -21,8 +21,13 @@ use windows::{
             FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, LPPROGRESS_ROUTINE_CALLBACK_REASON, MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING,
             MOVEFILE_WRITE_THROUGH, WIN32_FIND_DATAW,
         },
+        System::Com::{
+            CoTaskMemFree,
+            Urlmon::{FindMimeFromData, FMFD_URLASFILENAME},
+        },
     },
 };
+use windows_core::PWSTR;
 
 static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, u32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -79,8 +84,8 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-pub fn get_file_attribute(file_path: &str) -> Result<FileAttribute, String> {
-    let wide = encode_wide(prefixed(file_path));
+pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+    let wide = encode_wide(prefixed(file_path.as_ref()));
     let path = PCWSTR::from_raw(wide.as_ptr());
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
@@ -139,16 +144,39 @@ fn get_attributes(data: &WIN32_FIND_DATAW) -> FileAttribute {
     }
 }
 
-pub fn readdir(directory: String, recursive: bool) -> Result<Vec<Dirent>, String> {
+pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
+    if !file_path.as_ref().is_file() {
+        return Ok(String::new());
+    }
+
+    let _ = ComGuard::new();
+
+    let wide = encode_wide(prefixed(file_path.as_ref().file_name().unwrap()));
+    let mut mime_type = PWSTR::null();
+    unsafe { FindMimeFromData(None, PCWSTR::from_raw(wide.as_ptr()), None, 0, PCWSTR::null(), FMFD_URLASFILENAME, &mut mime_type as _, 0).map_err(|e| e.message()) }?;
+
+    let content_type = if !mime_type.is_null() {
+        let content = decode_wide(unsafe { mime_type.as_wide() });
+        unsafe { CoTaskMemFree(Some(mime_type.0 as _)) };
+        content
+    } else {
+        String::new()
+    };
+
+    Ok(content_type)
+}
+
+pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
     let mut entries = Vec::new();
 
-    let mut path = PathBuf::from(directory.clone());
-    if !path.is_dir() {
+    if !directory.as_ref().is_dir() {
         return Ok(entries);
     }
-    path.push("*");
 
-    let wide = encode_wide(prefixed(path.to_str().unwrap()));
+    let mut search_path = directory.as_ref().to_path_buf();
+    search_path.push("*");
+
+    let wide = encode_wide(prefixed(search_path));
     let path = PCWSTR::from_raw(wide.as_ptr());
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
@@ -157,12 +185,12 @@ pub fn readdir(directory: String, recursive: bool) -> Result<Vec<Dirent>, String
         return Ok(entries);
     }
 
-    try_readdir(handle, directory.clone(), &mut entries, recursive).unwrap();
+    try_readdir(handle, directory, &mut entries, recursive, with_mime_type).unwrap();
 
     Ok(entries)
 }
 
-fn try_readdir(handle: HANDLE, parent: String, entries: &mut Vec<Dirent>, recursive: bool) -> Result<&mut Vec<Dirent>, String> {
+fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
 
     while unsafe { FindNextFileW(handle, &mut data) }.is_ok() {
@@ -171,25 +199,32 @@ fn try_readdir(handle: HANDLE, parent: String, entries: &mut Vec<Dirent>, recurs
             continue;
         }
 
-        let mut full_path = PathBuf::from(&parent);
+        let mut full_path = parent.as_ref().to_path_buf();
         full_path.push(name.clone());
+
+        let mime_type = if with_mime_type {
+            get_mime_type(&name)?
+        } else {
+            String::new()
+        };
 
         entries.push(Dirent {
             name: name.clone(),
-            parent_path: parent.clone(),
+            parent_path: parent.as_ref().to_string_lossy().to_string(),
             full_path: full_path.to_string_lossy().to_string(),
             attributes: get_attributes(&data),
+            mime_type,
         });
 
         if data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 && recursive {
-            let mut next_path = PathBuf::from(&parent);
-            next_path.push(name);
-            let next_parent = next_path.to_string_lossy().to_string();
-            next_path.push("*");
-            let wide = encode_wide(prefixed(next_path.to_str().unwrap()));
+            let mut search_path = parent.as_ref().to_path_buf();
+            search_path.push(name);
+            let next_parent = search_path.clone();
+            search_path.push("*");
+            let wide = encode_wide(prefixed(search_path));
             let path = PCWSTR::from_raw(wide.as_ptr());
             let next_handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-            try_readdir(next_handle, next_parent, entries, recursive)?;
+            try_readdir(next_handle, next_parent, entries, recursive, with_mime_type)?;
         }
     }
 
@@ -215,17 +250,17 @@ pub fn reserve_cancellable() -> u32 {
     id
 }
 
-pub fn mv(source_file: String, dest_file: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv<P: AsRef<Path>, P2: AsRef<Path>>(source_file: P, dest_file: P2, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_mv(source_file, dest_file, callback, cancel_id);
     clean_up(cancel_id);
     result
 }
 
-fn inner_mv(source_file: String, dest_file: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
-    let source_wide = encode_wide(prefixed(&source_file));
-    let dest_wide = encode_wide(prefixed(&dest_file));
-    let source_file_fallback = source_file.clone();
-    let dest_file_fallback = dest_file.clone();
+fn inner_mv<P: AsRef<Path>, P2: AsRef<Path>>(source_file: P, dest_file: P2, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+    let source_wide = encode_wide(prefixed(source_file.as_ref()));
+    let dest_wide = encode_wide(prefixed(dest_file.as_ref()));
+    let source_file_fallback = source_file.as_ref();
+    let dest_file_fallback = dest_file.as_ref();
 
     if let Some(callback) = callback {
         let data = Box::into_raw(Box::new(ProgressData {
@@ -258,30 +293,28 @@ fn inner_mv(source_file: String, dest_file: String, callback: Option<&mut dyn Fn
     Ok(())
 }
 
-pub fn mv_all(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+pub fn mv_all<P: AsRef<Path>>(source_files: Vec<P>, dest_dir: P, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
     let result = inner_mv_bulk(source_files, dest_dir, callback, cancel_id);
     clean_up(cancel_id);
     result
 }
 
-fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
-    let dest_dir_path = Path::new(&dest_dir);
-    if dest_dir_path.is_file() {
+fn inner_mv_bulk<P: AsRef<Path>>(source_files: Vec<P>, dest_dir: P, callback: Option<&mut dyn FnMut(i64, i64)>, cancel_id: Option<u32>) -> Result<(), String> {
+    if dest_dir.as_ref().is_file() {
         return Err("Destination is file".to_string());
     }
 
     if let Some(callback) = callback {
         let mut total: i64 = 0;
-        let mut dest_files: Vec<String> = Vec::new();
-        let owned_source_files = source_files.clone();
+        let mut dest_files: Vec<PathBuf> = Vec::new();
 
-        for source_file in source_files {
-            let metadata = fs::metadata(&source_file).unwrap();
+        for i in 0..source_files.len() {
+            let source_file = source_files.get(i).unwrap();
+            let metadata = fs::metadata(source_file).unwrap();
             total += metadata.len() as i64;
-            let path = Path::new(&source_file);
-            let name = path.file_name().unwrap();
-            let dest_file = dest_dir_path.join(name);
-            dest_files.push(dest_file.to_string_lossy().to_string());
+            let name = source_file.as_ref().file_name().unwrap();
+            let dest_file = dest_dir.as_ref().join(name);
+            dest_files.push(dest_file);
         }
 
         let data = Box::into_raw(Box::new(ProgressData {
@@ -292,13 +325,13 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
             processed: 0,
         }));
 
-        for (i, source_file) in owned_source_files.iter().enumerate() {
+        for (i, source_file) in source_files.iter().enumerate() {
             let dest_file = dest_files.get(i).unwrap();
-            let source_file_fallback = source_file.clone();
+            let source_file_fallback = source_file;
             let dest_file_fallback = dest_file.clone();
 
             let done = match unsafe {
-                let source_wide = encode_wide(prefixed(source_file));
+                let source_wide = encode_wide(prefixed(source_file.as_ref()));
                 let dest_wide = encode_wide(prefixed(dest_file));
                 MoveFileWithProgressW(
                     PCWSTR::from_raw(source_wide.as_ptr()),
@@ -308,7 +341,7 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
                     MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
                 )
             } {
-                Ok(_) => move_fallback(source_file_fallback, dest_file_fallback)?,
+                Ok(_) => move_fallback(source_file_fallback, dest_file_fallback.as_path())?,
                 Err(e) => handel_error(e, source_file_fallback, true)?,
             };
 
@@ -318,22 +351,21 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
         }
     } else {
         let mut dest_files: Vec<String> = Vec::new();
-        let owned_source_files = source_files.clone();
 
-        for source_file in source_files {
-            let path = Path::new(&source_file);
-            let name = path.file_name().unwrap();
-            let dest_file = dest_dir_path.join(name);
+        for i in 0..source_files.len() {
+            let source_file = source_files.get(i).unwrap();
+            let name = source_file.as_ref().file_name().unwrap();
+            let dest_file = dest_dir.as_ref().join(name);
             dest_files.push(dest_file.to_string_lossy().to_string());
         }
 
-        for (i, source_file) in owned_source_files.iter().enumerate() {
+        for (i, source_file) in source_files.iter().enumerate() {
             let dest_file = dest_files.get(i).unwrap();
-            let source_file_fallback = source_file.clone();
+            let source_file_fallback = source_file.as_ref();
             let dest_file_fallback = dest_file.clone();
 
             let done = match unsafe {
-                let source_wide = encode_wide(prefixed(source_file));
+                let source_wide = encode_wide(prefixed(source_file.as_ref()));
                 let dest_wide = encode_wide(prefixed(dest_file));
                 MoveFileExW(PCWSTR::from_raw(source_wide.as_ptr()), PCWSTR::from_raw(dest_wide.as_ptr()), MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
             } {
@@ -350,9 +382,9 @@ fn inner_mv_bulk(source_files: Vec<String>, dest_dir: String, callback: Option<&
     Ok(())
 }
 
-fn move_fallback(source_file: String, dest_file: String) -> Result<bool, String> {
-    let source_wide = encode_wide(&source_file);
-    let dest_wide = encode_wide(&dest_file);
+fn move_fallback<P: AsRef<Path>, P2: AsRef<Path>>(source_file: P, dest_file: P2) -> Result<bool, String> {
+    let source_wide = encode_wide(source_file.as_ref());
+    let dest_wide = encode_wide(dest_file.as_ref());
 
     let source_file_exists = unsafe { GetFileAttributesW(PCWSTR::from_raw(source_wide.as_ptr())) } != FILE_NO_EXISTS;
     let dest_file_exists = unsafe { GetFileAttributesW(PCWSTR::from_raw(dest_wide.as_ptr())) } != FILE_NO_EXISTS;
@@ -367,9 +399,9 @@ fn move_fallback(source_file: String, dest_file: String) -> Result<bool, String>
     Ok(true)
 }
 
-fn handel_error(e: Error, file: String, treat_cancel_as_error: bool) -> Result<bool, String> {
+fn handel_error<P: AsRef<Path>>(e: Error, file: P, treat_cancel_as_error: bool) -> Result<bool, String> {
     if e.code() != CANCEL_ERROR_CODE {
-        return Err(format!("File: {}, Message: {}", file, e.message()));
+        return Err(format!("File: {}, Message: {}", file.as_ref().to_string_lossy(), e.message()));
     }
 
     if treat_cancel_as_error && e.code() == CANCEL_ERROR_CODE {

@@ -39,6 +39,7 @@ features = [
   "implement",
   "Win32_UI_Shell_Common",
   "Win32_System_SystemServices",
+  "Win32_System_Com_Urlmon",
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-core]

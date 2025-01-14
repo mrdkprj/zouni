@@ -1,4 +1,4 @@
-use super::util::{encode_wide, global_free};
+use super::util::{encode_wide, global_free, ComGuard};
 use crate::Operation;
 use std::mem::ManuallyDrop;
 use windows::{
@@ -6,7 +6,7 @@ use windows::{
     Win32::{
         Foundation::*,
         System::{
-            Com::{CoInitializeEx, CoUninitialize, IDataObject, COINIT_APARTMENTTHREADED, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
+            Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
             Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
             Ole::{DoDragDrop, IDropSource, IDropSource_Impl, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
             SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS},
@@ -16,7 +16,7 @@ use windows::{
 };
 
 pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), String> {
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let _ = ComGuard::new();
 
     let pidls: Vec<*const ITEMIDLIST> = file_paths
         .iter()
@@ -77,7 +77,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
     let format_etc = FORMATETC {
         cfFormat: CF_HDROP.0,
         ptd: std::ptr::null_mut(),
-        dwAspect: windows::Win32::System::Com::DVASPECT_CONTENT.0,
+        dwAspect: DVASPECT_CONTENT.0,
         lindex: -1,
         tymed: TYMED_HGLOBAL.0 as _,
     };
@@ -100,8 +100,6 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
     };
 
     let _ = unsafe { DoDragDrop(&data_object, &drop_source, effects, &mut effects) };
-
-    unsafe { CoUninitialize() };
 
     Ok(())
 }
