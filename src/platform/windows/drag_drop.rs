@@ -1,4 +1,4 @@
-use super::util::{encode_wide, global_free, ComGuard};
+use super::util::{encode_wide, global_free, prefixed, ComGuard};
 use crate::Operation;
 use std::mem::ManuallyDrop;
 use windows::{
@@ -22,7 +22,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
         .iter()
         .map(|path| {
             let mut pidl = std::ptr::null_mut();
-            let wide_str = encode_wide(path);
+            let wide_str = encode_wide(prefixed(path));
             unsafe { SHParseDisplayName(PCWSTR::from_raw(wide_str.as_ptr()), None, &mut pidl, 0, None) }?;
             Ok(pidl as *const _)
         })
@@ -39,7 +39,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
 
     let mut total_size = std::mem::size_of::<u32>();
     for path in file_paths {
-        let path_wide: Vec<u16> = encode_wide(path);
+        let path_wide: Vec<u16> = encode_wide(prefixed(path));
         total_size += path_wide.len() * 2;
     }
     total_size += std::mem::size_of::<DROPFILES>();
