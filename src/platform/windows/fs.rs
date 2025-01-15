@@ -1,4 +1,4 @@
-use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
+use super::util::{decode_wide, encode_wide, prefixed};
 use crate::{Dirent, FileAttribute, Volume};
 use once_cell::sync::Lazy;
 use std::{
@@ -21,13 +21,8 @@ use windows::{
             FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, LPPROGRESS_ROUTINE_CALLBACK_REASON, MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING,
             MOVEFILE_WRITE_THROUGH, WIN32_FIND_DATAW,
         },
-        System::Com::{
-            CoTaskMemFree,
-            Urlmon::{FindMimeFromData, FMFD_URLASFILENAME},
-        },
     },
 };
-use windows_core::PWSTR;
 
 static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, u32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -145,22 +140,9 @@ fn get_attributes(data: &WIN32_FIND_DATAW) -> FileAttribute {
 }
 
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
-    if !file_path.as_ref().is_file() {
-        return Ok(String::new());
-    }
-
-    let _ = ComGuard::new();
-
-    let wide = encode_wide(prefixed(file_path.as_ref().file_name().unwrap()));
-    let mut mime_type = PWSTR::null();
-    unsafe { FindMimeFromData(None, PCWSTR::from_raw(wide.as_ptr()), None, 0, PCWSTR::null(), FMFD_URLASFILENAME, &mut mime_type as _, 0).map_err(|e| e.message()) }?;
-
-    let content_type = if !mime_type.is_null() {
-        let content = decode_wide(unsafe { mime_type.as_wide() });
-        unsafe { CoTaskMemFree(Some(mime_type.0 as _)) };
-        content
-    } else {
-        String::new()
+    let content_type = match mime_guess::from_path(file_path).first() {
+        Some(s) => s.essence_str().to_string(),
+        None => String::new(),
     };
 
     Ok(content_type)
@@ -203,7 +185,14 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
         full_path.push(name.clone());
 
         let mime_type = if with_mime_type {
-            get_mime_type(&name)?
+            match get_mime_type(&name) {
+                Ok(n) => n,
+                Err(e) => {
+                    println!("{:?}", e);
+                    println!("{:?}", name);
+                    String::new()
+                }
+            }
         } else {
             String::new()
         };
@@ -224,7 +213,9 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
             let wide = encode_wide(prefixed(search_path));
             let path = PCWSTR::from_raw(wide.as_ptr());
             let next_handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-            try_readdir(next_handle, next_parent, entries, recursive, with_mime_type)?;
+            if !next_handle.is_invalid() {
+                try_readdir(next_handle, next_parent, entries, recursive, with_mime_type)?;
+            }
         }
     }
 
