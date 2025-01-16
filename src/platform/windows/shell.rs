@@ -1,14 +1,18 @@
 use super::util::{encode_wide, prefixed, ComGuard};
 use std::path::Path;
-use windows::Win32::{
-    Foundation::HWND,
-    System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
-    UI::Shell::{
-        FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST,
-        SHELLEXECUTEINFOW,
+use windows::{
+    core::PCWSTR,
+    Win32::{
+        Foundation::HWND,
+        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
+        UI::Shell::{
+            FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST,
+            SHELLEXECUTEINFOW,
+        },
     },
 };
-use windows_core::PCWSTR;
+
+const SW_SHOWNORMAL: i32 = 1;
 
 pub fn open_path<P: AsRef<Path>>(window_handle: isize, file_path: P) -> Result<(), String> {
     let _ = ComGuard::new();
@@ -21,6 +25,7 @@ pub fn open_path<P: AsRef<Path>>(window_handle: isize, file_path: P) -> Result<(
         lpVerb: PCWSTR::from_raw(wide_verb.as_ptr()),
         fMask: SEE_MASK_INVOKEIDLIST,
         lpFile: PCWSTR::from_raw(wide_path.as_ptr()),
+        nShow: SW_SHOWNORMAL,
         ..Default::default()
     };
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;

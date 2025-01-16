@@ -1,6 +1,6 @@
 use std::os::windows::ffi::OsStrExt;
 use windows::{
-    core::PCWSTR,
+    core::{HRESULT, PCWSTR},
     Win32::{
         Foundation::{GlobalFree, HGLOBAL, MAX_PATH},
         Globalization::lstrlenW,
@@ -10,7 +10,6 @@ use windows::{
         },
     },
 };
-use windows_core::HRESULT;
 
 pub(crate) fn decode_wide(wide: &[u16]) -> String {
     let len = unsafe { lstrlenW(PCWSTR::from_raw(wide.as_ptr())) } as usize;
