@@ -1,4 +1,4 @@
-use super::util::{decode_wide, encode_wide, prefixed};
+use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
 use crate::{Dirent, FileAttribute, Volume};
 use once_cell::sync::Lazy;
 use std::{
@@ -12,7 +12,7 @@ use std::{
     },
 };
 use windows::{
-    core::{Error, HRESULT, PCWSTR},
+    core::{Error, HRESULT, PCWSTR, PWSTR},
     Win32::{
         Foundation::{HANDLE, MAX_PATH},
         Storage::FileSystem::{
@@ -21,6 +21,8 @@ use windows::{
             FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, LPPROGRESS_ROUTINE_CALLBACK_REASON, MOVEFILE_COPY_ALLOWED, MOVEFILE_REPLACE_EXISTING,
             MOVEFILE_WRITE_THROUGH, WIN32_FIND_DATAW,
         },
+        System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
+        UI::Shell::{CLSID_QueryAssociations, IQueryAssociations, ASSOCF_NONE, ASSOCSTR_CONTENTTYPE},
     },
 };
 
@@ -37,13 +39,13 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let handle = unsafe { FindFirstVolumeW(&mut volume_name).map_err(|e| e.message()) }?;
 
     loop {
-        let mut drive_paths = vec![0u16; 261];
+        let mut drive_paths = vec![0u16; (MAX_PATH + 1) as usize];
         let mut len = 0;
         unsafe { GetVolumePathNamesForVolumeNameW(PCWSTR::from_raw(volume_name.as_ptr()), Some(&mut drive_paths), &mut len).map_err(|e| e.message()) }?;
 
         let mount_point = decode_wide(&drive_paths);
 
-        let mut volume_label_ptr = vec![0u16; 261];
+        let mut volume_label_ptr = vec![0u16; (MAX_PATH + 1) as usize];
         unsafe { GetVolumeInformationW(PCWSTR(volume_name.as_ptr()), Some(&mut volume_label_ptr), None, None, None, None).map_err(|e| e.message()) }?;
 
         let volume_label = decode_wide(&volume_label_ptr);
@@ -79,22 +81,24 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+pub fn get_file_attributes<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let wide = encode_wide(prefixed(file_path.as_ref()));
     let path = PCWSTR::from_raw(wide.as_ptr());
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-    let file_attribute = get_attributes(&data);
+    let file_attributes = get_attributes(&data);
     unsafe { FindClose(handle).map_err(|e| e.message()) }?;
 
-    Ok(file_attribute)
+    Ok(file_attributes)
 }
 
 fn to_msecs(low: u32, high: u32) -> f64 {
-    let windows_epoch = 11644473600000.0; // FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in milliseconds
+    // FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in milliseconds
+    let windows_epoch = 11644473600000.0;
     let ticks = ((high as u64) << 32) | low as u64;
-    let milliseconds = ticks as f64 / 10_000.0; // FILETIME is in 100-nanosecond intervals
+    // FILETIME is in 100-nanosecond intervals
+    let milliseconds = ticks as f64 / 10_000.0;
 
     milliseconds - windows_epoch
 }
@@ -148,6 +152,22 @@ pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
     Ok(content_type)
 }
 
+#[allow(dead_code)]
+fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
+    let _ = ComGuard::new();
+
+    let query_associations: IQueryAssociations = unsafe { CoCreateInstance(&CLSID_QueryAssociations, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
+
+    let wide = encode_wide(file_path.as_ref());
+    unsafe { query_associations.Init(ASSOCF_NONE, PCWSTR::from_raw(wide.as_ptr()), None, None).map_err(|e| e.message()) }?;
+    let mut mime_type_ptr = [0u16; 256];
+    let mime_type = PWSTR::from_raw(mime_type_ptr.as_mut_ptr());
+    let mut mime_len = unsafe { mime_type.len() } as u32;
+    unsafe { query_associations.GetString(ASSOCF_NONE, ASSOCSTR_CONTENTTYPE, None, mime_type, &mut mime_len).map_err(|e| e.message()) }?;
+    let content_type = decode_wide(unsafe { mime_type.as_wide() });
+    Ok(content_type)
+}
+
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
     let mut entries = Vec::new();
 
@@ -167,7 +187,7 @@ pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bo
         return Ok(entries);
     }
 
-    try_readdir(handle, directory, &mut entries, recursive, with_mime_type).unwrap();
+    try_readdir(handle, directory, &mut entries, recursive, with_mime_type)?;
 
     Ok(entries)
 }
@@ -185,14 +205,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
         full_path.push(name.clone());
 
         let mime_type = if with_mime_type {
-            match get_mime_type(&name) {
-                Ok(n) => n,
-                Err(e) => {
-                    println!("{:?}", e);
-                    println!("{:?}", name);
-                    String::new()
-                }
-            }
+            get_mime_type(&name)?
         } else {
             String::new()
         };

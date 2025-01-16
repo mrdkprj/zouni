@@ -1,10 +1,10 @@
-use super::util::{decode_wide, encode_wide, global_free};
+use super::util::{decode_wide, encode_wide, GlobalMemory};
 use crate::{ClipboardData, Operation};
 use windows::Win32::{
     Foundation::{HANDLE, HGLOBAL, HWND},
     System::{
         DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData},
-        Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+        Memory::{GlobalLock, GlobalUnlock},
         Ole::{CF_HDROP, CF_TEXT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
     },
     UI::Shell::{DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, DROPFILES, HDROP},
@@ -48,21 +48,18 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
 
     unsafe { EmptyClipboard().map_err(|e| e.message()) }?;
 
-    let len = text.len() + 1; // Include null terminator.
-    let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, len).map_err(|e| e.message()) }?;
+    // Include null terminator.
+    let len = text.len() + 1;
+    let hglobal = GlobalMemory::new(len)?;
 
-    let ptr = unsafe { GlobalLock(hglobal) } as *mut u8;
-    if ptr.is_null() {
-        global_free(hglobal)?;
-        return Err("Failed to free memory".to_string());
-    }
+    let ptr = hglobal.lock()?;
 
     unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), ptr, text.len()) };
-    unsafe { *ptr.add(text.len()) = 0 }; // Add null terminator.
-    let _ = unsafe { GlobalUnlock(hglobal) };
-    if unsafe { SetClipboardData(CF_TEXT.0 as u32, HANDLE(hglobal.0)).is_err() } {
+    // Add null terminator.
+    unsafe { *ptr.add(text.len()) = 0 };
+    hglobal.unlock();
+    if unsafe { SetClipboardData(CF_TEXT.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
-        global_free(hglobal)?;
         return Err("Failed to write clipboard".to_string());
     }
 
@@ -134,16 +131,11 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
 
     // Calculate the size needed for the DROPFILES structure and file list
     let dropfiles_size = std::mem::size_of::<DROPFILES>();
-    let file_list_size = file_list.len() * std::mem::size_of::<u16>();
 
-    let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE, total_size).map_err(|e| e.message()) }?;
+    let hglobal = GlobalMemory::new(total_size)?;
 
     // Lock the memory to write to it
-    let ptr = unsafe { GlobalLock(hglobal) } as *mut u8;
-    if ptr.is_null() {
-        global_free(hglobal)?;
-        return Err("Failed to lock memory".to_string());
-    }
+    let ptr = hglobal.lock()?;
 
     let dropfiles = DROPFILES {
         pFiles: dropfiles_size as u32,
@@ -151,20 +143,25 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
         fNC: false.into(),
         fWide: true.into(),
     };
-    unsafe { std::ptr::copy_nonoverlapping(&dropfiles as *const _ as *const u8, ptr, dropfiles_size) };
+
+    unsafe { std::ptr::write(ptr as *mut DROPFILES, dropfiles) };
 
     // Write the file list as wide characters (UTF-16)
     let wide_file_list: Vec<u16> = file_list.encode_utf16().collect();
-    unsafe { std::ptr::copy_nonoverlapping(wide_file_list.as_ptr() as *const u8, ptr.add(dropfiles_size), file_list_size) };
+    let dest = unsafe { ptr.add(dropfiles_size) } as *mut u16;
+    let src = wide_file_list.as_ptr();
+    let len = wide_file_list.len();
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, dest, len);
+    };
 
-    let _ = unsafe { GlobalUnlock(hglobal) };
+    hglobal.unlock();
 
     unsafe { OpenClipboard(HWND(window_handle as _)).map_err(|e| e.message()) }?;
     unsafe { EmptyClipboard().map_err(|e| e.message()) }?;
 
-    if unsafe { SetClipboardData(CF_HDROP.0 as u32, HANDLE(hglobal.0)).is_err() } {
+    if unsafe { SetClipboardData(CF_HDROP.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
-        global_free(hglobal)?;
         return Err("Failed to write clipboard".to_string());
     }
 
@@ -174,23 +171,18 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
         Operation::None => DROPEFFECT_NONE.0,
     };
 
-    let hglobal_operation = unsafe { GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of::<u32>()).map_err(|e| e.message()) }?;
+    let hglobal_operation = GlobalMemory::new(std::mem::size_of::<u32>())?;
 
-    let ptr_operation = unsafe { GlobalLock(hglobal_operation) } as *mut u32;
-    if ptr_operation.is_null() {
-        global_free(hglobal_operation)?;
-        return Err("Failed to free memory".to_string());
-    }
+    let ptr_operation = hglobal_operation.lock()?;
 
-    unsafe { *ptr_operation = operation_value };
+    unsafe { *ptr_operation = operation_value as u8 };
 
-    let _ = unsafe { GlobalUnlock(hglobal_operation) };
+    hglobal_operation.unlock();
 
     let custom_format = unsafe { RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT) };
 
-    if unsafe { SetClipboardData(custom_format, HANDLE(hglobal_operation.0)).is_err() } {
+    if unsafe { SetClipboardData(custom_format, HANDLE(hglobal_operation.handle().0)).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
-        global_free(hglobal_operation)?;
         return Err("Failed to write clipboard format".to_string());
     }
 
@@ -207,7 +199,7 @@ fn get_preferred_drop_effect() -> Operation {
 
     if unsafe { IsClipboardFormatAvailable(cf_format).is_ok() } {
         if let Ok(handle) = unsafe { GetClipboardData(cf_format) } {
-            let hglobal = windows::Win32::Foundation::HGLOBAL(handle.0);
+            let hglobal = HGLOBAL(handle.0);
             let ptr = unsafe { GlobalLock(hglobal) } as *const u32;
             if !ptr.is_null() {
                 let drop_effect = unsafe { *ptr };

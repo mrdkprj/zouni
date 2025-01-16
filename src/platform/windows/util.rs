@@ -4,7 +4,10 @@ use windows::{
     Win32::{
         Foundation::{GlobalFree, HGLOBAL, MAX_PATH},
         Globalization::lstrlenW,
-        System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
+        System::{
+            Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+        },
     },
 };
 use windows_core::HRESULT;
@@ -31,23 +34,9 @@ pub(crate) fn prefixed(path: impl AsRef<std::ffi::OsStr>) -> String {
     }
 }
 
-pub(crate) fn global_free(hglobal: HGLOBAL) -> Result<(), String> {
-    match unsafe { GlobalFree(hglobal) } {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            if err.code() == HRESULT(0x00000000) {
-                Ok(())
-            } else {
-                Err(err.message())
-            }
-        }
-    }
-}
-
 pub(crate) struct ComGuard;
 
 impl ComGuard {
-    /// Initializes COM for the current thread.
     pub fn new() -> Self {
         let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         Self
@@ -57,5 +46,52 @@ impl ComGuard {
 impl Drop for ComGuard {
     fn drop(&mut self) {
         unsafe { CoUninitialize() };
+    }
+}
+
+pub(crate) struct GlobalMemory {
+    handle: HGLOBAL,
+}
+
+impl GlobalMemory {
+    pub fn new(size: usize) -> Result<Self, String> {
+        match unsafe { GlobalAlloc(GMEM_MOVEABLE, size) } {
+            Ok(handle) => Ok(Self {
+                handle,
+            }),
+            Err(_) => Err("Failed to allocate global memory".to_string()),
+        }
+    }
+
+    pub fn lock(&self) -> Result<*mut u8, String> {
+        let ptr = unsafe { GlobalLock(self.handle) } as *mut u8;
+        if ptr.is_null() {
+            Err("Failed to lock global memory".to_string())
+        } else {
+            Ok(ptr)
+        }
+    }
+
+    pub fn unlock(&self) {
+        let _ = unsafe { GlobalUnlock(self.handle) };
+    }
+
+    pub fn handle(&self) -> HGLOBAL {
+        self.handle
+    }
+}
+
+impl Drop for GlobalMemory {
+    fn drop(&mut self) {
+        if !self.handle.is_invalid() {
+            match unsafe { GlobalFree(self.handle) } {
+                Ok(_) => {}
+                Err(e) => {
+                    if e.code() != HRESULT(0x00000000) {
+                        eprintln!("Error freeing global memory: {:?}", e);
+                    }
+                }
+            }
+        }
     }
 }

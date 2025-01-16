@@ -1,6 +1,5 @@
-use std::path::Path;
-
 use super::util::{encode_wide, prefixed, ComGuard};
+use std::path::Path;
 use windows::Win32::{
     Foundation::HWND,
     System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
