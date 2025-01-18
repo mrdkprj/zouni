@@ -81,26 +81,16 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-pub fn get_file_attributes<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let wide = encode_wide(prefixed(file_path.as_ref()));
     let path = PCWSTR::from_raw(wide.as_ptr());
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-    let file_attributes = get_attributes(&data);
+    let file_attributes = get_attribute(&data);
     unsafe { FindClose(handle).map_err(|e| e.message()) }?;
 
     Ok(file_attributes)
-}
-
-fn to_msecs(low: u32, high: u32) -> f64 {
-    // FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in milliseconds
-    let windows_epoch = 11644473600000.0;
-    let ticks = ((high as u64) << 32) | low as u64;
-    // FILETIME is in 100-nanosecond intervals
-    let milliseconds = ticks as f64 / 10_000.0;
-
-    milliseconds - windows_epoch
 }
 
 #[derive(PartialEq)]
@@ -125,9 +115,10 @@ fn get_file_type(attr: u32) -> FileType {
     FileType::File
 }
 
-fn get_attributes(data: &WIN32_FIND_DATAW) -> FileAttribute {
+fn get_attribute(data: &WIN32_FIND_DATAW) -> FileAttribute {
     let attributes = data.dwFileAttributes;
     let file_type = get_file_type(attributes);
+
     FileAttribute {
         is_directory: file_type == FileType::Dir,
         is_read_only: attributes & FILE_ATTRIBUTE_READONLY.0 != 0,
@@ -136,11 +127,22 @@ fn get_attributes(data: &WIN32_FIND_DATAW) -> FileAttribute {
         is_device: file_type == FileType::Device,
         is_file: file_type == FileType::File,
         is_symbolic_link: file_type == FileType::Link,
-        ctime: to_msecs(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
-        mtime: to_msecs(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
-        atime: to_msecs(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
+        ctime_ms: 0.0,
+        mtime_ms: to_msecs_from_file_time(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
+        atime_ms: to_msecs_from_file_time(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
+        birthtime_ms: to_msecs_from_file_time(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
         size: (data.nFileSizeLow as u64) | ((data.nFileSizeHigh as u64) << 32),
     }
+}
+
+fn to_msecs_from_file_time(low: u32, high: u32) -> f64 {
+    // FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in milliseconds
+    let windows_epoch = 11644473600000.0;
+    let ticks = ((high as u64) << 32) | low as u64;
+    // FILETIME is in 100-nanosecond intervals
+    let milliseconds = ticks as f64 / 10_000.0;
+
+    milliseconds - windows_epoch
 }
 
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
@@ -214,7 +216,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
             name: name.clone(),
             parent_path: parent.as_ref().to_string_lossy().to_string(),
             full_path: full_path.to_string_lossy().to_string(),
-            attributes: get_attributes(&data),
+            attributes: get_attribute(&data),
             mime_type,
         });
 

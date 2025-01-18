@@ -4,10 +4,10 @@ use gio::{
     glib::{
         ffi::{gpointer, GFALSE},
         translate::{from_glib_full, ToGlibPtr},
-        DateTime, Error,
+        Error,
     },
     prelude::{CancellableExt, DriveExt, FileExt, MountExt, VolumeExt, VolumeMonitorExt},
-    Cancellable, File, FileCopyFlags, FileQueryInfoFlags, FileType, IOErrorEnum, VolumeMonitor,
+    Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType, IOErrorEnum, VolumeMonitor,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -22,6 +22,8 @@ use std::{
 
 static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*";
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let _ = gtk::init();
@@ -53,33 +55,39 @@ pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bo
         return Ok(Vec::new());
     }
 
+    let file = File::for_parse_name(directory.as_ref().to_str().unwrap());
+
     let mut entries = Vec::new();
-    try_readdir(directory, &mut entries, recursive, with_mime_type).map_err(|e| e)?;
+    try_readdir(file, &mut entries, recursive, with_mime_type).map_err(|e| e)?;
 
     Ok(entries)
 }
 
-fn try_readdir<P: AsRef<Path>>(dir: P, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
-    for entry in fs::read_dir(dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if entry.path().is_dir() && recursive {
-            try_readdir(entry.path(), entries, recursive, with_mime_type)?;
+fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
+    for child in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap() {
+        if let Ok(info) = child {
+            let name = info.name();
+            let mut full_path = dir.path().unwrap().to_path_buf();
+            full_path.push(name.clone());
+            let mime_type = if with_mime_type {
+                get_mime_type(&full_path)?
+            } else {
+                String::new()
+            };
+
+            entries.push(Dirent {
+                name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                parent_path: dir.to_string(),
+                full_path: full_path.to_string_lossy().to_string(),
+                attributes: to_file_attribute(&info),
+                mime_type,
+            });
+
+            if info.file_type() == FileType::Directory && recursive {
+                let next_dir = File::for_path(full_path);
+                try_readdir(next_dir, entries, recursive, with_mime_type)?;
+            }
         }
-
-        let path = entry.path();
-        let mime_type = if with_mime_type {
-            get_mime_type(&path)?
-        } else {
-            String::new()
-        };
-
-        entries.push(Dirent {
-            name: entry.file_name().to_string_lossy().to_string(),
-            parent_path: path.parent().unwrap_or(Path::new("")).to_string_lossy().to_string(),
-            full_path: entry.path().to_string_lossy().to_string(),
-            attributes: get_file_attribute(path.to_str().unwrap()).map_err(|e| e)?,
-            mime_type,
-        });
     }
 
     Ok(entries)
@@ -87,24 +95,43 @@ fn try_readdir<P: AsRef<Path>>(dir: P, entries: &mut Vec<Dirent>, recursive: boo
 
 pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-    let info = file.query_info("standard::*", FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
+    let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
 
-    Ok(FileAttribute {
+    Ok(to_file_attribute(&info))
+}
+
+fn to_file_attribute(info: &FileInfo) -> FileAttribute {
+    FileAttribute {
         is_directory: info.file_type() == FileType::Directory,
-        is_read_only: false,
+        is_read_only: info.boolean("filesystem::readonly"),
         is_hidden: info.is_hidden(),
         is_system: info.file_type() == FileType::Special,
         is_device: info.file_type() == FileType::Mountable,
         is_file: info.file_type() == FileType::Regular,
         is_symbolic_link: info.file_type() == FileType::SymbolicLink,
-        ctime: info.creation_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
-        mtime: info.modification_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
-        atime: info.access_date_time().unwrap_or(DateTime::now_local().unwrap()).to_unix() as f64,
+        ctime_ms: to_msecs(info.attribute_uint64("time::changed"), info.attribute_uint32("time::changed-usec")) as _,
+        mtime_ms: to_msecs(info.attribute_uint64("time::modified"), info.attribute_uint32("time::modified-usec")) as _,
+        atime_ms: to_msecs(info.attribute_uint64("time::access"), info.attribute_uint32("time::access-usec")) as _,
+        birthtime_ms: to_msecs(info.attribute_uint64("time::created"), info.attribute_uint32("time::created-usec")) as _,
         size: info.size() as u64,
-    })
+    }
+}
+
+fn to_msecs(secs: u64, microsecs: u32) -> f64 {
+    (secs as f64) * 1000.0 + (microsecs as f64) / 1000.0
 }
 
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
+    let content_type = match mime_guess::from_path(file_path).first() {
+        Some(s) => s.essence_str().to_string(),
+        None => String::new(),
+    };
+
+    Ok(content_type)
+}
+
+#[allow(dead_code)]
+fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
     if !file_path.as_ref().is_file() {
         return Ok(String::new());
     }

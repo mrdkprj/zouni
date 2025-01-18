@@ -22,9 +22,10 @@ pub struct FileAttribute {
     pub is_device: bool,
     pub is_symbolic_link: bool,
     pub is_file: bool,
-    pub ctime: f64,
-    pub mtime: f64,
-    pub atime: f64,
+    pub ctime_ms: f64,
+    pub mtime_ms: f64,
+    pub atime_ms: f64,
+    pub birthtime_ms: f64,
     pub size: u64,
 }
 
