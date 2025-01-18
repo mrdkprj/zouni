@@ -6,8 +6,8 @@ use windows::{
     Win32::{
         Foundation::*,
         System::{
-            Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
-            Ole::{DoDragDrop, IDropSource, IDropSource_Impl, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
+            Com::{CoTaskMemFree, IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
+            Ole::{DoDragDrop, IDropSource, IDropSource_Impl, ReleaseStgMedium, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
             SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS},
         },
         UI::Shell::{Common::ITEMIDLIST, SHCreateDataObject, SHParseDisplayName, DROPFILES},
@@ -81,7 +81,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
         tymed: TYMED_HGLOBAL.0 as _,
     };
 
-    let stg_medium = STGMEDIUM {
+    let mut stg_medium = STGMEDIUM {
         tymed: TYMED_HGLOBAL.0 as _,
         u: STGMEDIUM_0 {
             hGlobal: hglobal.handle(),
@@ -92,6 +92,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
     unsafe { data_object.SetData(&format_etc, &stg_medium, true).map_err(|e| e.message()) }?;
 
     let drop_source: IDropSource = DragDropTarget.into();
+
     let mut effects = match operation {
         Operation::Copy => DROPEFFECT_COPY,
         Operation::Move => DROPEFFECT_MOVE,
@@ -101,8 +102,10 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
     let _ = unsafe { DoDragDrop(&data_object, &drop_source, effects, &mut effects) };
 
     for pidl in &pidls {
-        unsafe { windows::Win32::System::Com::CoTaskMemFree(Some(*pidl as *mut _)) };
+        unsafe { CoTaskMemFree(Some(*pidl as *mut _)) };
     }
+
+    unsafe { ReleaseStgMedium(&mut stg_medium) };
 
     Ok(())
 }
@@ -124,7 +127,7 @@ impl IDropSource_Impl for DragDropTarget_Impl {
         S_OK
     }
 
-    fn GiveFeedback(&self, _dweffect: DROPEFFECT) -> windows_core::HRESULT {
+    fn GiveFeedback(&self, _dweffect: DROPEFFECT) -> HRESULT {
         DRAGDROP_S_USEDEFAULTCURSORS
     }
 }
