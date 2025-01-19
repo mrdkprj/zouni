@@ -93,7 +93,7 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
     Ok(entries)
 }
 
-pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
     let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
 

@@ -81,7 +81,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-pub fn get_file_attribute<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let wide = encode_wide(prefixed(file_path.as_ref()));
     let path = PCWSTR::from_raw(wide.as_ptr());
 
