@@ -48,17 +48,17 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
 
     unsafe { EmptyClipboard().map_err(|e| e.message()) }?;
 
-    // Include null terminator.
-    let len = text.len() + 1;
-    let hglobal = GlobalMemory::new(len)?;
+    let utf16 = encode_wide(text);
+    let size_in_bytes = utf16.len() * std::mem::size_of::<u16>();
+    let hglobal = GlobalMemory::new(size_in_bytes)?;
 
     let ptr = hglobal.lock()?;
 
-    unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), ptr, text.len()) };
-    // Add null terminator.
-    unsafe { *ptr.add(text.len()) = 0 };
+    unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr as *mut u16, utf16.len()) };
+
     hglobal.unlock();
-    if unsafe { SetClipboardData(CF_TEXT.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
+
+    if unsafe { SetClipboardData(windows::Win32::System::Ole::CF_UNICODETEXT.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard".to_string());
     }
