@@ -5,13 +5,21 @@ use windows::Win32::{
     System::{
         DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData},
         Memory::{GlobalLock, GlobalUnlock},
-        Ole::{CF_HDROP, CF_TEXT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
+        Ole::{CF_HDROP, CF_TEXT, CF_UNICODETEXT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
     },
     UI::Shell::{DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, DROPFILES, HDROP},
 };
 
 pub fn is_text_available() -> bool {
+    is_ansi_text_available() || is_unicode_text_available()
+}
+
+fn is_ansi_text_available() -> bool {
     unsafe { IsClipboardFormatAvailable(CF_TEXT.0 as u32).is_ok() }
+}
+
+fn is_unicode_text_available() -> bool {
+    unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok() }
 }
 
 pub fn read_text(window_handle: isize) -> Result<String, String> {
@@ -23,19 +31,36 @@ pub fn read_text(window_handle: isize) -> Result<String, String> {
 
     unsafe { OpenClipboard(HWND(window_handle as _)).map_err(|e| e.message()) }?;
 
-    if let Ok(handle) = unsafe { GetClipboardData(CF_TEXT.0 as u32) } {
+    let format = if is_unicode_text_available() {
+        CF_UNICODETEXT.0 as u32
+    } else {
+        CF_TEXT.0 as u32
+    };
+
+    if let Ok(handle) = unsafe { GetClipboardData(format) } {
         let hglobal = HGLOBAL(handle.0);
         let ptr = unsafe { GlobalLock(hglobal) } as *const u8;
-        if !ptr.is_null() {
-            // Find the null terminator to determine the string length.
-            let mut len = 0;
-            while unsafe { *ptr.add(len) } != 0 {
-                len += 1;
-            }
+
+        if ptr.is_null() {
+            unsafe { CloseClipboard().map_err(|e| e.message()) }?;
+            return Err("Failed to lock global memory.".to_string());
+        }
+
+        // Find the null terminator to determine the string length.
+        let mut len = 0;
+        while unsafe { *ptr.add(len) } != 0 {
+            len += 1;
+        }
+
+        if format == CF_UNICODETEXT.0 as u32 {
+            let slice = unsafe { std::slice::from_raw_parts(ptr as *const u16, len) };
+            text = decode_wide(slice);
+        } else {
             let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
             text = String::from_utf8_lossy(slice).to_string();
-            unsafe { GlobalUnlock(hglobal).map_err(|e| e.message()) }?;
         }
+
+        let _ = unsafe { GlobalUnlock(hglobal) };
     }
 
     unsafe { CloseClipboard().map_err(|e| e.message()) }?;
@@ -58,12 +83,14 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
 
     hglobal.unlock();
 
-    if unsafe { SetClipboardData(windows::Win32::System::Ole::CF_UNICODETEXT.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
+    if unsafe { SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard".to_string());
     }
 
     unsafe { CloseClipboard().map_err(|e| e.message()) }?;
+
+    std::mem::forget(hglobal);
 
     Ok(())
 }
@@ -185,6 +212,9 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard format".to_string());
     }
+
+    std::mem::forget(hglobal);
+    std::mem::forget(hglobal_operation);
 
     unsafe { CloseClipboard().map_err(|e| e.message()) }?;
 
