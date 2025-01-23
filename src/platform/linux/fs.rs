@@ -1,3 +1,4 @@
+use super::util::init;
 use crate::{Dirent, FileAttribute, Volume};
 use gio::{
     ffi::{g_file_copy, G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
@@ -26,7 +27,8 @@ static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*";
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
-    let _ = gtk::init();
+    init();
+
     let mut volumes = Vec::new();
     let monitor = VolumeMonitor::get();
 
@@ -70,7 +72,7 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
             let mut full_path = dir.path().unwrap().to_path_buf();
             full_path.push(name.clone());
             let mime_type = if with_mime_type {
-                get_mime_type(&full_path)?
+                get_mime_type(&full_path)
             } else {
                 String::new()
             };
@@ -121,13 +123,11 @@ fn to_msecs(secs: u64, microsecs: u32) -> f64 {
     (secs as f64) * 1000.0 + (microsecs as f64) / 1000.0
 }
 
-pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
-    let content_type = match mime_guess::from_path(file_path).first() {
+pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
+    match mime_guess::from_path(file_path).first() {
         Some(s) => s.essence_str().to_string(),
         None => String::new(),
-    };
-
-    Ok(content_type)
+    }
 }
 
 #[allow(dead_code)]

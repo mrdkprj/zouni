@@ -1,11 +1,12 @@
 #![allow(unused_imports)]
-use crate::Operation;
+use crate::{platform::linux::util::init, Operation};
 use gio::glib::translate::FromGlibPtrNone;
 use gtk::{ffi::GtkWidget, prelude::WidgetExt, TargetEntry, Widget};
 
 pub fn start_drag(_: isize, file_paths: Vec<String>, _operation: Operation) -> Result<(), String> {
     println!("1");
-    let _ = gtk::init();
+    init();
+
     let widgets = gtk::Window::list_toplevels();
     if widgets.is_empty() {
         return Ok(());

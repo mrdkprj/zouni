@@ -145,13 +145,11 @@ fn to_msecs_from_file_time(low: u32, high: u32) -> f64 {
     milliseconds - windows_epoch
 }
 
-pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
-    let content_type = match mime_guess::from_path(file_path).first() {
+pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
+    match mime_guess::from_path(file_path).first() {
         Some(s) => s.essence_str().to_string(),
         None => String::new(),
-    };
-
-    Ok(content_type)
+    }
 }
 
 #[allow(dead_code)]
@@ -207,7 +205,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
         full_path.push(name.clone());
 
         let mime_type = if with_mime_type {
-            get_mime_type(&name)?
+            get_mime_type(&name)
         } else {
             String::new()
         };

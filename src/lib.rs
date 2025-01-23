@@ -50,3 +50,10 @@ pub struct Dirent {
     pub attributes: FileAttribute,
     pub mime_type: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppInfo {
+    pub path: String,
+    pub name: String,
+    pub icon: String,
+}
