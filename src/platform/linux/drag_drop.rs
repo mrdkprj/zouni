@@ -3,7 +3,7 @@ use crate::{platform::linux::util::init, Operation};
 use gio::glib::translate::FromGlibPtrNone;
 use gtk::{ffi::GtkWidget, prelude::WidgetExt, TargetEntry, Widget};
 
-pub fn start_drag(_: isize, file_paths: Vec<String>, _operation: Operation) -> Result<(), String> {
+pub fn start_drag(file_paths: Vec<String>, _operation: Operation) -> Result<(), String> {
     println!("1");
     init();
 
