@@ -91,10 +91,16 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                 }
 
                 if let Some(handler) = handlers[0].take() {
-                    let path_ptr = unsafe { handler.GetName().unwrap_or(PWSTR::null()) };
-                    let path = decode_wide(unsafe { path_ptr.as_wide() });
-                    let name_ptr = unsafe { handler.GetUIName().unwrap_or(PWSTR::null()) };
-                    let name = decode_wide(unsafe { name_ptr.as_wide() });
+                    let path = match unsafe { handler.GetName() } {
+                        Ok(path_ptr) => decode_wide(unsafe { path_ptr.as_wide() }),
+                        Err(_) => String::new(),
+                    };
+
+                    let name = match unsafe { handler.GetUIName() } {
+                        Ok(name_ptr) => decode_wide(unsafe { name_ptr.as_wide() }),
+                        Err(_) => String::new(),
+                    };
+
                     let mut icon_path = PWSTR::null();
                     let mut index = 0;
                     let icon_location = unsafe { handler.GetIconLocation(&mut icon_path, &mut index) };
@@ -103,6 +109,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                     } else {
                         String::new()
                     };
+
                     apps.push(AppInfo {
                         path,
                         name,
