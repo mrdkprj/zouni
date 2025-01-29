@@ -1,14 +1,19 @@
 use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
-use crate::AppInfo;
+use crate::{AppInfo, RgbaIcon};
 use std::path::Path;
 use windows::{
-    core::{PCWSTR, PWSTR},
+    core::{HSTRING, PCWSTR, PWSTR},
+    Management::Deployment::PackageManager,
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, MAX_PATH},
+        Graphics::Gdi::{CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
         System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
-        UI::Shell::{
-            FileOperation, IFileOperation, IShellItem, SHAssocEnumHandlers, SHCreateItemFromParsingName, SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW, ASSOC_FILTER_RECOMMENDED,
-            FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+        UI::{
+            Shell::{
+                ExtractIconExW, FileOperation, IFileOperation, IShellItem, SHAssocEnumHandlers, SHCreateItemFromParsingName, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName,
+                ShellExecuteExW, ASSOC_FILTER_RECOMMENDED, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+            },
+            WindowsAndMessaging::{GetIconInfo, HICON, ICONINFO},
         },
     },
 };
@@ -91,7 +96,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                 }
 
                 if let Some(handler) = handlers[0].take() {
-                    let path = match unsafe { handler.GetName() } {
+                    let mut path = match unsafe { handler.GetName() } {
                         Ok(path_ptr) => decode_wide(unsafe { path_ptr.as_wide() }),
                         Err(_) => String::new(),
                     };
@@ -104,16 +109,39 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                     let mut icon_path = PWSTR::null();
                     let mut index = 0;
                     let icon_location = unsafe { handler.GetIconLocation(&mut icon_path, &mut index) };
-                    let icon = if icon_location.is_ok() {
-                        decode_wide(unsafe { icon_path.as_wide() })
+                    let uwp = if icon_location.is_ok() {
+                        is_uwp(icon_path)
+                    } else {
+                        false
+                    };
+                    let icon = if uwp {
+                        get_icon_path(icon_path)
                     } else {
                         String::new()
                     };
+
+                    let rgba_icon = if icon.is_empty() && icon_location.is_ok() {
+                        to_rgba_bitmap(icon_path, index).unwrap_or_default()
+                    } else {
+                        RgbaIcon::default()
+                    };
+
+                    if uwp {
+                        if let Some(model_id) = extract_app_user_model_id(icon_path) {
+                            let manager = PackageManager::new().unwrap();
+                            let pkg = manager.FindPackageByUserSecurityIdPackageFullName(&HSTRING::new(), &HSTRING::from(&model_id)).unwrap();
+
+                            let ent = pkg.GetAppListEntries().unwrap().GetAt(0).unwrap();
+                            let model_id = ent.AppUserModelId().unwrap();
+                            path = format!(r#"shell:AppsFolder\{}"#, &model_id);
+                        }
+                    }
 
                     apps.push(AppInfo {
                         path,
                         name,
                         icon,
+                        rgba_icon,
                     });
                 }
             }
@@ -123,21 +151,104 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
     apps
 }
 
-/*
-fn extract_icon(icon_path: &str, icon_index: i32) -> Option<HICON> {
-    let icon_path_w: Vec<u16> = icon_path.encode_utf16().chain(Some(0)).collect();
-    let mut large_icon: [HICON; 1] = [HICON::default()];
-    let mut small_icon: [HICON; 1] = [HICON::default()];
-
-    unsafe {
-        let count = ExtractIconExW(PCWSTR(icon_path_w.as_ptr()), icon_index, large_icon.as_mut_ptr(), small_icon.as_mut_ptr(), 1);
-        if count > 0 {
-            return Some(large_icon[0]); // Return the large icon
+fn extract_app_user_model_id(input: PWSTR) -> Option<String> {
+    let input_string = decode_wide(unsafe { input.as_wide() });
+    if let Some(start) = input_string.find('{') {
+        if let Some(end) = input_string.find('?') {
+            return Some(input_string[start + 1..end].to_string());
         }
     }
     None
 }
- */
+
+fn is_uwp(icon_location: PWSTR) -> bool {
+    let icon_path = decode_wide(unsafe { icon_location.as_wide() });
+    icon_path.starts_with("@")
+}
+
+/* Get actual icon path if path starts with "@" */
+fn get_icon_path(icon_location: PWSTR) -> String {
+    let icon_path = decode_wide(unsafe { icon_location.as_wide() });
+    let wide_path = encode_wide(icon_path);
+    let mut actual_path: [u16; MAX_PATH as _] = [0; MAX_PATH as _];
+    unsafe { SHLoadIndirectString(PCWSTR(wide_path.as_ptr()), &mut actual_path, None).map_err(|e| e.message()) }.unwrap();
+
+    decode_wide(&actual_path)
+}
+
+/* Get rgba from icon path */
+fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String> {
+    let icon_path = decode_wide(unsafe { icon_path.as_wide() });
+
+    if let Some(hicon) = extract_icon(&icon_path, icon_index) {
+        let mut icon_info = ICONINFO::default();
+        unsafe { GetIconInfo(hicon, &mut icon_info).map_err(|e| e.message()) }?;
+
+        // Retrieve bitmap details
+        let mut bitmap = BITMAP::default();
+        if unsafe { GetObjectW(icon_info.hbmColor, std::mem::size_of::<BITMAP>() as i32, Some(&mut bitmap as *mut _ as *mut _)) } == 0 {
+            return Err("Failed to get bitmap details".to_string());
+        }
+
+        let width = bitmap.bmWidth as u32;
+        let height = bitmap.bmHeight as u32;
+
+        let hdc = unsafe { CreateCompatibleDC(HDC::default()) };
+        if hdc.is_invalid() {
+            return Err("Failed to create compatible DC".to_string());
+        }
+
+        let mut bitmap_info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width as i32,
+                biHeight: -(height as i32), // Negative height for top-down bitmap
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut pixel_data: Vec<u8> = vec![0; (width * height * 4) as usize];
+
+        // Retrieve the RGBA pixel data
+        unsafe { SelectObject(hdc, icon_info.hbmColor) };
+        if unsafe { GetDIBits(hdc, icon_info.hbmColor, 0, height, Some(pixel_data.as_mut_ptr() as *mut _), &mut bitmap_info, DIB_RGB_COLORS) } == 0 {
+            let _ = unsafe { DeleteDC(hdc) };
+            return Err("Failed to retrieve pixel data".to_string());
+        }
+
+        let _ = unsafe { DeleteDC(hdc) };
+        let _ = unsafe { DeleteObject(icon_info.hbmColor) };
+        let _ = unsafe { DeleteObject(icon_info.hbmMask) };
+
+        return Ok(RgbaIcon {
+            rgba: pixel_data,
+            width,
+            height,
+        });
+    }
+
+    Err("Not found".to_string())
+}
+
+fn extract_icon(icon_path: &str, icon_index: i32) -> Option<HICON> {
+    if icon_path.is_empty() {
+        return None;
+    }
+
+    let icon_path_w = encode_wide(icon_path);
+    let mut small_icon: [HICON; 1] = [HICON::default()];
+
+    let count = unsafe { ExtractIconExW(PCWSTR(icon_path_w.as_ptr()), icon_index, None, Some(small_icon.as_mut_ptr()), 1) };
+    if count > 0 {
+        return Some(small_icon[0]);
+    }
+
+    None
+}
 
 pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _ = ComGuard::new();

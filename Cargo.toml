@@ -40,6 +40,12 @@ features = [
   "implement",
   "Win32_UI_Shell_Common",
   "Win32_System_SystemServices",
+  "Win32_UI_WindowsAndMessaging",
+
+  "Management_Deployment",
+  "ApplicationModel",
+  "Foundation_Collections",
+  "ApplicationModel_Core",
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-core]

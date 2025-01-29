@@ -202,6 +202,10 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
         }
 
         let mut full_path = parent.as_ref().to_path_buf();
+
+        if full_path.to_str().unwrap().ends_with(":") {
+            full_path.push(std::path::MAIN_SEPARATOR_STR);
+        }
         full_path.push(name.clone());
 
         let mime_type = if with_mime_type {

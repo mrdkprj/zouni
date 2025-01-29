@@ -1,13 +1,15 @@
+use super::{fs::get_mime_type, util::init};
 use crate::AppInfo;
 use gio::{
     glib::{Cast, GString, ToVariant},
     prelude::{AppInfoExt, FileExt},
     AppInfoCreateFlags, AppLaunchContext, Cancellable, DBusCallFlags, DBusConnectionFlags, File, FileIcon, ThemedIcon,
 };
-use gtk::{prelude::WidgetExt, DialogFlags};
+use gtk::{
+    prelude::{IconThemeExt, WidgetExt},
+    AppChooserDialog, DialogFlags, IconLookupFlags, IconSize, IconTheme,
+};
 use std::path::Path;
-
-use super::{fs::get_mime_type, util::init};
 
 pub fn open_file_property<P: AsRef<Path>>(_file_path: P) -> Result<(), String> {
     Ok(())
@@ -26,9 +28,18 @@ pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(_file_path: P1, _app_pat
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     init();
     let file = File::for_path(file_path.as_ref().to_str().unwrap());
-    let dialog = gtk::AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
+    let dialog = AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
     dialog.show_all();
     Ok(())
+}
+
+fn resolve_themed_icon(icon_name: &str) -> String {
+    init();
+    let theme = IconTheme::default().unwrap();
+    if let Some(path) = theme.lookup_icon(icon_name, IconSize::Dialog.into(), IconLookupFlags::empty()) {
+        return path.filename().unwrap_or_default().to_string_lossy().to_string();
+    }
+    String::new()
 }
 
 pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
@@ -40,7 +51,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
         let path = app_info.commandline().unwrap_or_default().to_string_lossy().to_string();
         let icon = if let Some(icon) = app_info.icon() {
             if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
-                themed_icon.names().first().unwrap_or(&GString::new()).to_string()
+                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str())
             } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
                 file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
             } else {
