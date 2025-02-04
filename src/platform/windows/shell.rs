@@ -1,19 +1,23 @@
 use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
 use crate::{AppInfo, RgbaIcon};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use windows::{
     core::{HSTRING, PCWSTR, PWSTR},
     Management::Deployment::PackageManager,
     Win32::{
-        Foundation::{HWND, MAX_PATH},
-        Graphics::Gdi::{CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
-        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
+        Foundation::{GENERIC_READ, HWND, LPARAM, LRESULT, MAX_PATH, WPARAM},
+        Graphics::{
+            Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
+            Imaging::{CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand},
+        },
+        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, CLSCTX_INPROC_SERVER},
         UI::{
             Shell::{
-                ExtractIconExW, FileOperation, IFileOperation, IShellItem, SHAssocEnumHandlers, SHCreateItemFromParsingName, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName,
-                ShellExecuteExW, ASSOC_FILTER_RECOMMENDED, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+                DefSubclassProc, ExtractIconExW, FileOperation, IFileOperation, IShellItem, ITaskbarList3, RemoveWindowSubclass, SHAssocEnumHandlers, SHCreateItemFromParsingName,
+                SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW, TaskbarList, ASSOC_FILTER_RECOMMENDED, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST,
+                SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBN_CLICKED, THB_ICON, THB_TOOLTIP, THUMBBUTTON, THUMBBUTTONFLAGS,
             },
-            WindowsAndMessaging::{GetIconInfo, HICON, ICONINFO},
+            WindowsAndMessaging::{CreateIconIndirect, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
         },
     },
 };
@@ -293,4 +297,151 @@ pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     unsafe { op.PerformOperations().map_err(|e| e.message()) }?;
 
     Ok(())
+}
+
+pub struct ThumbButton {
+    pub id: u32,
+    pub tool_tip: Option<String>,
+    pub icon: PathBuf,
+}
+
+pub fn set_thumbar_buttons(window_handle: isize, buttons: &[ThumbButton], callback: &mut dyn FnMut(u32)) {
+    let hwnd = HWND(window_handle as _);
+
+    let _ = ComGuard::new();
+
+    let mut thumb_buttons: Vec<THUMBBUTTON> = Vec::new();
+
+    for button in buttons {
+        let hicon = create_hicon(&button.icon);
+
+        let mut thumb_button = THUMBBUTTON {
+            iId: button.id,
+            iBitmap: 0,
+            hIcon: hicon,
+            szTip: [0; 260],
+            dwMask: THB_ICON | THB_TOOLTIP,
+            dwFlags: THUMBBUTTONFLAGS(0),
+        };
+
+        // Set tooltip
+        if let Some(tooltip) = &button.tool_tip {
+            let tooltip_wide = encode_wide(tooltip);
+            thumb_button.szTip[..tooltip_wide.len()].copy_from_slice(&tooltip_wide);
+        }
+
+        thumb_buttons.push(thumb_button);
+    }
+
+    let taskbar: ITaskbarList3 = unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER).unwrap() };
+    unsafe { taskbar.HrInit().unwrap() };
+
+    unsafe {
+        taskbar.ThumbBarAddButtons(hwnd, &thumb_buttons).unwrap();
+    }
+
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 200, Box::into_raw(Box::new(callback)) as _);
+    }
+}
+
+fn create_hicon(file_path: &PathBuf) -> HICON {
+    let imaging_factory: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).unwrap() };
+
+    let wide = encode_wide(file_path);
+    let decoder = unsafe { imaging_factory.CreateDecoderFromFilename(PCWSTR::from_raw(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).unwrap() };
+
+    let frame = unsafe { decoder.GetFrame(0).unwrap() };
+
+    let converter = unsafe { imaging_factory.CreateFormatConverter().unwrap() };
+    unsafe { converter.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).unwrap() };
+
+    let mut width = 0;
+    let mut height = 0;
+    unsafe { converter.GetSize(&mut width, &mut height).unwrap() };
+
+    let stride = (width * 4) as usize;
+
+    let buffer_size = stride * height as usize;
+    let mut pixel_data = vec![0u8; buffer_size];
+
+    // Copy WIC bitmap to HBITMAP
+    unsafe { converter.CopyPixels(std::ptr::null(), width * 4, &mut pixel_data) }.unwrap();
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        },
+        ..Default::default()
+    };
+
+    let hdc = unsafe { CreateCompatibleDC(None) };
+    let mut bits_ptr: *mut u8 = std::ptr::null_mut();
+    let hbitmap = unsafe { CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits_ptr as *mut *mut u8 as *mut *mut _, None, 0).unwrap() };
+
+    if hbitmap.is_invalid() || pixel_data.is_empty() {
+        let _ = unsafe { DeleteDC(hdc) };
+        return HICON(0 as _);
+    }
+
+    // Copy pixel data into the HBITMAP memory
+    unsafe { std::ptr::copy_nonoverlapping(pixel_data.as_ptr(), bits_ptr, buffer_size) };
+
+    let _ = unsafe { DeleteDC(hdc) };
+
+    let icon_info = ICONINFO {
+        fIcon: true.into(),
+        xHotspot: 0,
+        yHotspot: 0,
+        hbmMask: hbitmap,
+        hbmColor: hbitmap,
+    };
+
+    let hicon = unsafe { CreateIconIndirect(&icon_info).ok().unwrap() };
+
+    let _ = unsafe { DeleteObject(hbitmap) };
+
+    hicon
+}
+
+unsafe extern "system" fn subclass_proc(window: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _uidsubclass: usize, dwrefdata: usize) -> LRESULT {
+    match msg {
+        WM_COMMAND => {
+            let hiword = HIWORD(wparam.0 as _);
+            if hiword == THBN_CLICKED as _ {
+                let button_in = LOWORD(wparam.0 as _);
+                let callback = unsafe { &mut *(dwrefdata as *mut Box<dyn FnMut(u32)>) };
+                (callback)(button_in as _);
+                return LRESULT(0);
+            }
+            DefSubclassProc(window, msg, wparam, lparam)
+        }
+
+        WM_DESTROY => {
+            let _ = RemoveWindowSubclass(window, Some(subclass_proc), 200);
+            DefSubclassProc(window, msg, wparam, lparam)
+        }
+
+        _ => DefSubclassProc(window, msg, wparam, lparam),
+    }
+}
+
+#[allow(non_snake_case)]
+fn LOWORD(dword: u32) -> u16 {
+    (dword & 0xFFFF) as u16
+}
+
+#[allow(non_snake_case)]
+fn HIWORD(dword: u32) -> u16 {
+    ((dword & 0xFFFF_0000) >> 16) as u16
 }

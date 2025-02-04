@@ -41,7 +41,7 @@ features = [
   "Win32_UI_Shell_Common",
   "Win32_System_SystemServices",
   "Win32_UI_WindowsAndMessaging",
-
+  "Win32_Graphics_Imaging",
   "Management_Deployment",
   "ApplicationModel",
   "Foundation_Collections",
