@@ -1,6 +1,10 @@
 use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
 use crate::{AppInfo, RgbaIcon};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 use windows::{
     core::{HSTRING, PCWSTR, PWSTR},
     Management::Deployment::PackageManager,
@@ -15,7 +19,7 @@ use windows::{
             Shell::{
                 DefSubclassProc, ExtractIconExW, FileOperation, IFileOperation, IShellItem, ITaskbarList3, RemoveWindowSubclass, SHAssocEnumHandlers, SHCreateItemFromParsingName,
                 SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW, TaskbarList, ASSOC_FILTER_RECOMMENDED, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST,
-                SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBN_CLICKED, THB_ICON, THB_TOOLTIP, THUMBBUTTON, THUMBBUTTONFLAGS,
+                SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
             },
             WindowsAndMessaging::{CreateIconIndirect, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
         },
@@ -300,28 +304,50 @@ pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 }
 
 pub struct ThumbButton {
-    pub id: u32,
+    pub id: String,
     pub tool_tip: Option<String>,
     pub icon: PathBuf,
 }
 
-pub fn set_thumbar_buttons(window_handle: isize, buttons: &[ThumbButton], callback: &mut dyn FnMut(u32)) {
+struct InnerThumbButtons<'a> {
+    callback: &'a dyn Fn(String),
+    id_map: HashMap<u32, String>,
+}
+
+static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
+
+pub fn set_thumbar_buttons(window_handle: isize, buttons: &[ThumbButton], callback: &dyn Fn(String)) {
     let hwnd = HWND(window_handle as _);
 
     let _ = ComGuard::new();
 
     let mut thumb_buttons: Vec<THUMBBUTTON> = Vec::new();
+    let mut id_map = HashMap::new();
 
-    for button in buttons {
+    for i in 0..7 {
+        // Set hidden buttons to the limit(7 buttons) so that new buttons can replace the existing buttons
+        if i >= buttons.len() {
+            thumb_buttons.push(THUMBBUTTON {
+                iId: i as _,
+                dwFlags: THBF_HIDDEN,
+                dwMask: THB_FLAGS,
+                ..Default::default()
+            });
+            continue;
+        }
+
+        let button = buttons.get(i).unwrap();
+        id_map.insert(i as _, button.id.clone());
+
         let hicon = create_hicon(&button.icon);
 
         let mut thumb_button = THUMBBUTTON {
-            iId: button.id,
+            iId: i as _,
             iBitmap: 0,
             hIcon: hicon,
             szTip: [0; 260],
-            dwMask: THB_ICON | THB_TOOLTIP,
-            dwFlags: THUMBBUTTONFLAGS(0),
+            dwMask: THB_FLAGS | THB_ICON | THB_TOOLTIP,
+            dwFlags: THBF_ENABLED,
         };
 
         // Set tooltip
@@ -334,14 +360,25 @@ pub fn set_thumbar_buttons(window_handle: isize, buttons: &[ThumbButton], callba
     }
 
     let taskbar: ITaskbarList3 = unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER).unwrap() };
+
     unsafe { taskbar.HrInit().unwrap() };
 
-    unsafe {
-        taskbar.ThumbBarAddButtons(hwnd, &thumb_buttons).unwrap();
+    if BUTTONS_ADDED.get().is_none() {
+        unsafe { taskbar.ThumbBarAddButtons(hwnd, &thumb_buttons).unwrap() };
+        BUTTONS_ADDED.set(true).unwrap();
+    } else {
+        unsafe {
+            taskbar.ThumbBarUpdateButtons(hwnd, &thumb_buttons).unwrap();
+        }
     }
 
+    let inner = InnerThumbButtons {
+        callback,
+        id_map,
+    };
+
     unsafe {
-        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 200, Box::into_raw(Box::new(callback)) as _);
+        let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 200, Box::into_raw(Box::new(inner)) as _);
     }
 }
 
@@ -418,12 +455,17 @@ unsafe extern "system" fn subclass_proc(window: HWND, msg: u32, wparam: WPARAM, 
     match msg {
         WM_COMMAND => {
             let hiword = HIWORD(wparam.0 as _);
+
             if hiword == THBN_CLICKED as _ {
-                let button_in = LOWORD(wparam.0 as _);
-                let callback = unsafe { &mut *(dwrefdata as *mut Box<dyn FnMut(u32)>) };
-                (callback)(button_in as _);
+                let button_in = LOWORD(wparam.0 as _) as u32;
+                let inner = unsafe { &mut *(dwrefdata as *mut InnerThumbButtons) };
+                if let Some(id) = inner.id_map.get(&button_in) {
+                    (inner.callback)(id.to_string());
+                }
+
                 return LRESULT(0);
             }
+
             DefSubclassProc(window, msg, wparam, lparam)
         }
 
