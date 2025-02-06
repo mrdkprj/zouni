@@ -309,14 +309,14 @@ pub struct ThumbButton {
     pub icon: PathBuf,
 }
 
-struct InnerThumbButtons<'a> {
-    callback: &'a dyn Fn(String),
+struct InnerThumbButtons {
+    callback: Box<dyn Fn(String)>,
     id_map: HashMap<u32, String>,
 }
 
 static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
 
-pub fn set_thumbar_buttons(window_handle: isize, buttons: &[ThumbButton], callback: &dyn Fn(String)) {
+pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) {
     let hwnd = HWND(window_handle as _);
 
     let _ = ComGuard::new();
@@ -373,7 +373,7 @@ pub fn set_thumbar_buttons(window_handle: isize, buttons: &[ThumbButton], callba
     }
 
     let inner = InnerThumbButtons {
-        callback,
+        callback: Box::new(callback),
         id_map,
     };
 
