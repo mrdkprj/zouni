@@ -1,5 +1,5 @@
 use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
-use crate::{AppInfo, RgbaIcon};
+use crate::{AppInfo, RgbaIcon, ThumbButton};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -42,12 +42,10 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
         nShow: SW_SHOWNORMAL,
         ..Default::default()
     };
-    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
-
-    Ok(())
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
-pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+pub fn open_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
     let _ = ComGuard::new();
 
     let app_path = encode_wide(app_path.as_ref());
@@ -61,9 +59,7 @@ pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path:
         nShow: SW_SHOWNORMAL,
         ..Default::default()
     };
-    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
-
-    Ok(())
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
@@ -79,9 +75,7 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
         lpFile: PCWSTR::from_raw(wide_path.as_ptr()),
         ..Default::default()
     };
-    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
-
-    Ok(())
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
 pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
@@ -271,9 +265,7 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
         lpFile: PCWSTR::from_raw(wide_path.as_ptr()),
         ..Default::default()
     };
-    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }?;
-
-    Ok(())
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
 pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
@@ -298,15 +290,7 @@ pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let file_wide = encode_wide(prefixed(file_path.as_ref()));
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
     unsafe { op.DeleteItem(&shell_item, None).map_err(|e| e.message()) }?;
-    unsafe { op.PerformOperations().map_err(|e| e.message()) }?;
-
-    Ok(())
-}
-
-pub struct ThumbButton {
-    pub id: String,
-    pub tool_tip: Option<String>,
-    pub icon: PathBuf,
+    unsafe { op.PerformOperations().map_err(|e| e.message()) }
 }
 
 struct InnerThumbButtons {
@@ -316,7 +300,7 @@ struct InnerThumbButtons {
 
 static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
 
-pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) {
+pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     let hwnd = HWND(window_handle as _);
 
     let _ = ComGuard::new();
@@ -339,7 +323,7 @@ pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, button
         let button = buttons.get(i).unwrap();
         id_map.insert(i as _, button.id.clone());
 
-        let hicon = create_hicon(&button.icon);
+        let hicon = create_hicon(&button.icon)?;
 
         let mut thumb_button = THUMBBUTTON {
             iId: i as _,
@@ -359,17 +343,15 @@ pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, button
         thumb_buttons.push(thumb_button);
     }
 
-    let taskbar: ITaskbarList3 = unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER).unwrap() };
+    let taskbar: ITaskbarList3 = unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
 
-    unsafe { taskbar.HrInit().unwrap() };
+    unsafe { taskbar.HrInit().map_err(|e| e.message()) }?;
 
     if BUTTONS_ADDED.get().is_none() {
-        unsafe { taskbar.ThumbBarAddButtons(hwnd, &thumb_buttons).unwrap() };
+        unsafe { taskbar.ThumbBarAddButtons(hwnd, &thumb_buttons).map_err(|e| e.message()) }?;
         BUTTONS_ADDED.set(true).unwrap();
     } else {
-        unsafe {
-            taskbar.ThumbBarUpdateButtons(hwnd, &thumb_buttons).unwrap();
-        }
+        unsafe { taskbar.ThumbBarUpdateButtons(hwnd, &thumb_buttons).map_err(|e| e.message()) }?;
     }
 
     let inner = InnerThumbButtons {
@@ -380,22 +362,24 @@ pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, button
     unsafe {
         let _ = SetWindowSubclass(hwnd, Some(subclass_proc), 200, Box::into_raw(Box::new(inner)) as _);
     }
+
+    Ok(())
 }
 
-fn create_hicon(file_path: &PathBuf) -> HICON {
-    let imaging_factory: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).unwrap() };
+fn create_hicon(file_path: &PathBuf) -> Result<HICON, String> {
+    let imaging_factory: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
 
     let wide = encode_wide(file_path);
-    let decoder = unsafe { imaging_factory.CreateDecoderFromFilename(PCWSTR::from_raw(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).unwrap() };
+    let decoder = unsafe { imaging_factory.CreateDecoderFromFilename(PCWSTR::from_raw(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).map_err(|e| e.message()) }?;
 
     let frame = unsafe { decoder.GetFrame(0).unwrap() };
 
     let converter = unsafe { imaging_factory.CreateFormatConverter().unwrap() };
-    unsafe { converter.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).unwrap() };
+    unsafe { converter.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).map_err(|e| e.message()) }?;
 
     let mut width = 0;
     let mut height = 0;
-    unsafe { converter.GetSize(&mut width, &mut height).unwrap() };
+    unsafe { converter.GetSize(&mut width, &mut height).map_err(|e| e.message()) }?;
 
     let stride = (width * 4) as usize;
 
@@ -403,7 +387,7 @@ fn create_hicon(file_path: &PathBuf) -> HICON {
     let mut pixel_data = vec![0u8; buffer_size];
 
     // Copy WIC bitmap to HBITMAP
-    unsafe { converter.CopyPixels(std::ptr::null(), width * 4, &mut pixel_data) }.unwrap();
+    unsafe { converter.CopyPixels(std::ptr::null(), width * 4, &mut pixel_data).map_err(|e| e.message()) }?;
 
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -424,11 +408,11 @@ fn create_hicon(file_path: &PathBuf) -> HICON {
 
     let hdc = unsafe { CreateCompatibleDC(None) };
     let mut bits_ptr: *mut u8 = std::ptr::null_mut();
-    let hbitmap = unsafe { CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits_ptr as *mut *mut u8 as *mut *mut _, None, 0).unwrap() };
+    let hbitmap = unsafe { CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits_ptr as *mut *mut u8 as *mut *mut _, None, 0).map_err(|e| e.message()) }?;
 
     if hbitmap.is_invalid() || pixel_data.is_empty() {
         let _ = unsafe { DeleteDC(hdc) };
-        return HICON(0 as _);
+        return Ok(HICON(0 as _));
     }
 
     // Copy pixel data into the HBITMAP memory
@@ -444,11 +428,11 @@ fn create_hicon(file_path: &PathBuf) -> HICON {
         hbmColor: hbitmap,
     };
 
-    let hicon = unsafe { CreateIconIndirect(&icon_info).ok().unwrap() };
+    let hicon = unsafe { CreateIconIndirect(&icon_info).map_err(|e| e.message()) }?;
 
     let _ = unsafe { DeleteObject(hbitmap) };
 
-    hicon
+    Ok(hicon)
 }
 
 unsafe extern "system" fn subclass_proc(window: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _uidsubclass: usize, dwrefdata: usize) -> LRESULT {

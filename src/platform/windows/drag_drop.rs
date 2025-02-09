@@ -26,7 +26,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
             Ok(pidl as *const _)
         })
         .collect::<windows::core::Result<_>>()
-        .unwrap();
+        .map_err(|e| e.message())?;
 
     let data_object: IDataObject = unsafe { SHCreateDataObject(None, Some(&pidls), None).map_err(|e| e.message()) }?;
 

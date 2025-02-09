@@ -1,5 +1,5 @@
 use super::{fs::get_mime_type, util::init};
-use crate::AppInfo;
+use crate::{AppInfo, ThumbButton};
 use gio::{
     glib::{Cast, GString, ToVariant},
     prelude::{AppInfoExt, FileExt},
@@ -11,7 +11,8 @@ use gtk::{
 };
 use std::path::Path;
 
-pub fn open_file_property<P: AsRef<Path>>(_file_path: P) -> Result<(), String> {
+#[allow(unused_variables)]
+pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     Ok(())
 }
 
@@ -20,7 +21,7 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     gio::AppInfo::launch_default_for_uri(&uri, AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
-pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(_file_path: P1, _app_path: P2) -> Result<(), String> {
+pub fn open_with<P1: AsRef<Path>, P2: AsRef<Path>>(_file_path: P1, _app_path: P2) -> Result<(), String> {
     let info = gio::AppInfo::create_from_commandline(_app_path.as_ref(), None, AppInfoCreateFlags::NONE).map_err(|e| e.message().to_string())?;
     info.launch(&[File::for_path(_file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
@@ -94,4 +95,9 @@ pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
     let file = File::for_parse_name(file.as_ref().to_str().unwrap());
     file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
+}
+
+#[allow(unused_variables)]
+pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
+    Ok(())
 }

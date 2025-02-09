@@ -1,4 +1,6 @@
 mod platform;
+use std::path::PathBuf;
+
 #[cfg(target_os = "linux")]
 pub use platform::linux::*;
 #[cfg(target_os = "windows")]
@@ -65,4 +67,11 @@ pub struct RgbaIcon {
     pub rgba: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThumbButton {
+    pub id: String,
+    pub tool_tip: Option<String>,
+    pub icon: PathBuf,
 }
