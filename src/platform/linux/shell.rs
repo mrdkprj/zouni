@@ -92,11 +92,6 @@ pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     Ok(())
 }
 
-pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
-    let file = File::for_parse_name(file.as_ref().to_str().unwrap());
-    file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
-}
-
 #[allow(unused_variables)]
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     Ok(())

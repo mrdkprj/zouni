@@ -13,7 +13,7 @@ use windows::{
         System::Com::{CoCreateInstance, CLSCTX_ALL, CLSCTX_INPROC_SERVER},
         UI::Shell::{
             CLSID_QueryAssociations, Common::ITEMIDLIST, FileOperation, IFileOperation, IQueryAssociations, IShellItem, IShellItemArray, SHCreateItemFromParsingName,
-            SHCreateShellItemArrayFromIDLists, SHParseDisplayName, ASSOCF_NONE, ASSOCSTR_CONTENTTYPE,
+            SHCreateShellItemArrayFromIDLists, SHParseDisplayName, ASSOCF_NONE, ASSOCSTR_CONTENTTYPE, FOF_ALLOWUNDO,
         },
     },
 };
@@ -298,12 +298,34 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     execute(op)
 }
 
+pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
+    let _ = ComGuard::new();
+
+    let file_wide = encode_wide(prefixed(file_path.as_ref()));
+    let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
+
+    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
+    unsafe { op.DeleteItem(&shell_item, None).map_err(|e| e.message()) }?;
+    execute(op)
+}
+
+pub fn trash_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
+    let _ = ComGuard::new();
+
+    let item_array = get_id_lists(file_paths)?;
+    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
+    unsafe { op.DeleteItems(&item_array).map_err(|e| e.message()) }?;
+    execute(op)
+}
+
 fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
     let pidls: Vec<*const ITEMIDLIST> = from
         .iter()
         .map(|path| {
             let mut pidl = std::ptr::null_mut();
-            let wide_str = encode_wide(path.as_ref());
+            let wide_str = encode_wide(prefixed(path.as_ref()));
             unsafe { SHParseDisplayName(PCWSTR::from_raw(wide_str.as_ptr()), None, &mut pidl, 0, None) }?;
             Ok(pidl as *const _)
         })

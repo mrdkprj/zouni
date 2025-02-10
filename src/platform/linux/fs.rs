@@ -269,6 +269,18 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     Ok(())
 }
 
+pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
+    let file = File::for_parse_name(file.as_ref().to_str().unwrap());
+    file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
+}
+
+pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
+    for file in files {
+        trash(file)?;
+    }
+    Ok(())
+}
+
 pub fn cancel(id: u32) -> bool {
     if let Ok(tokens) = CANCELLABLES.try_lock() {
         if let Some(token) = tokens.get(&id) {

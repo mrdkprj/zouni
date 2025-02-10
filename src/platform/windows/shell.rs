@@ -1,4 +1,4 @@
-use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
+use super::util::{decode_wide, encode_wide, ComGuard};
 use crate::{AppInfo, RgbaIcon, ThumbButton};
 use std::{
     collections::HashMap,
@@ -14,12 +14,12 @@ use windows::{
             Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
             Imaging::{CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand},
         },
-        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL, CLSCTX_INPROC_SERVER},
+        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER},
         UI::{
             Shell::{
-                DefSubclassProc, ExtractIconExW, FileOperation, IFileOperation, IShellItem, ITaskbarList3, RemoveWindowSubclass, SHAssocEnumHandlers, SHCreateItemFromParsingName,
-                SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW, TaskbarList, ASSOC_FILTER_RECOMMENDED, FOF_ALLOWUNDO, SEE_MASK_INVOKEIDLIST,
-                SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
+                DefSubclassProc, ExtractIconExW, ITaskbarList3, RemoveWindowSubclass, SHAssocEnumHandlers, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass,
+                ShellExecuteExW, TaskbarList, ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS,
+                THB_ICON, THB_TOOLTIP, THUMBBUTTON,
             },
             WindowsAndMessaging::{CreateIconIndirect, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
         },
@@ -277,27 +277,6 @@ pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     if !idlist.is_null() {
         let _ = unsafe { SHOpenFolderAndSelectItems(idlist, None, 0) };
         unsafe { CoTaskMemFree(Some(idlist as _)) };
-    }
-
-    Ok(())
-}
-
-pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
-
-    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
-    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
-    let file_wide = encode_wide(prefixed(file_path.as_ref()));
-    let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
-    unsafe { op.DeleteItem(&shell_item, None).map_err(|e| e.message()) }?;
-    let result = unsafe { op.PerformOperations() };
-
-    if result.is_err() {
-        if unsafe { op.GetAnyOperationsAborted().map_err(|e| e.message()) }?.as_bool() {
-            return Ok(());
-        } else {
-            return result.map_err(|e| e.message());
-        }
     }
 
     Ok(())
