@@ -45,7 +45,7 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
-pub fn open_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
     let _ = ComGuard::new();
 
     let app_path = encode_wide(app_path.as_ref());
@@ -290,7 +290,17 @@ pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let file_wide = encode_wide(prefixed(file_path.as_ref()));
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
     unsafe { op.DeleteItem(&shell_item, None).map_err(|e| e.message()) }?;
-    unsafe { op.PerformOperations().map_err(|e| e.message()) }
+    let result = unsafe { op.PerformOperations() };
+
+    if result.is_err() {
+        if unsafe { op.GetAnyOperationsAborted().map_err(|e| e.message()) }?.as_bool() {
+            return Ok(());
+        } else {
+            return result.map_err(|e| e.message());
+        }
+    }
+
+    Ok(())
 }
 
 struct InnerThumbButtons {

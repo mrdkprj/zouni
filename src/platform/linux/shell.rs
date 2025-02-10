@@ -21,7 +21,7 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     gio::AppInfo::launch_default_for_uri(&uri, AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
-pub fn open_with<P1: AsRef<Path>, P2: AsRef<Path>>(_file_path: P1, _app_path: P2) -> Result<(), String> {
+pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(_file_path: P1, _app_path: P2) -> Result<(), String> {
     let info = gio::AppInfo::create_from_commandline(_app_path.as_ref(), None, AppInfoCreateFlags::NONE).map_err(|e| e.message().to_string())?;
     info.launch(&[File::for_path(_file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }

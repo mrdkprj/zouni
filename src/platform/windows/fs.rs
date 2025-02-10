@@ -12,8 +12,8 @@ use windows::{
         },
         System::Com::{CoCreateInstance, CLSCTX_ALL, CLSCTX_INPROC_SERVER},
         UI::Shell::{
-            CLSID_QueryAssociations, Common::ITEMIDLIST, FileOperation, IFileOperation, IQueryAssociations, IShellItem, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists,
-            SHParseDisplayName, ASSOCF_NONE, ASSOCSTR_CONTENTTYPE,
+            CLSID_QueryAssociations, Common::ITEMIDLIST, FileOperation, IFileOperation, IQueryAssociations, IShellItem, IShellItemArray, SHCreateItemFromParsingName,
+            SHCreateShellItemArrayFromIDLists, SHParseDisplayName, ASSOCF_NONE, ASSOCSTR_CONTENTTYPE,
         },
     },
 };
@@ -237,30 +237,19 @@ pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), Stri
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
     unsafe { op.MoveItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
-    unsafe { op.PerformOperations().map_err(|e| e.message()) }
+    execute(op)
 }
 
 pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
     let _ = ComGuard::new();
 
-    let pidls: Vec<*const ITEMIDLIST> = from
-        .iter()
-        .map(|path| {
-            let mut pidl = std::ptr::null_mut();
-            let wide_str = encode_wide(path.as_ref());
-            unsafe { SHParseDisplayName(PCWSTR::from_raw(wide_str.as_ptr()), None, &mut pidl, 0, None) }?;
-            Ok(pidl as *const _)
-        })
-        .collect::<windows::core::Result<_>>()
-        .map_err(|e| e.message())?;
-
-    let from_item_array = unsafe { SHCreateShellItemArrayFromIDLists(&pidls).map_err(|e| e.message()) }?;
+    let from_item_array = get_id_lists(from)?;
     let to_wide = encode_wide(prefixed(to.as_ref()));
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
     unsafe { op.MoveItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
-    unsafe { op.PerformOperations().map_err(|e| e.message()) }
+    execute(op)
 }
 
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
@@ -273,12 +262,43 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
     unsafe { op.CopyItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
-    unsafe { op.PerformOperations().map_err(|e| e.message()) }
+    execute(op)
 }
 
 pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
     let _ = ComGuard::new();
 
+    let from_item_array = get_id_lists(from)?;
+    let to_wide = encode_wide(prefixed(to.as_ref()));
+    let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
+
+    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.CopyItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
+    execute(op)
+}
+
+pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
+    let _ = ComGuard::new();
+
+    let file_wide = encode_wide(prefixed(file_path.as_ref()));
+    let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
+
+    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.DeleteItem(&shell_item, None).map_err(|e| e.message()) }?;
+    execute(op)
+}
+
+pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
+    let _ = ComGuard::new();
+
+    let item_array = get_id_lists(file_paths)?;
+
+    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.DeleteItems(&item_array).map_err(|e| e.message()) }?;
+    execute(op)
+}
+
+fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
     let pidls: Vec<*const ITEMIDLIST> = from
         .iter()
         .map(|path| {
@@ -290,11 +310,19 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
         .collect::<windows::core::Result<_>>()
         .map_err(|e| e.message())?;
 
-    let from_item_array = unsafe { SHCreateShellItemArrayFromIDLists(&pidls).map_err(|e| e.message()) }?;
-    let to_wide = encode_wide(prefixed(to.as_ref()));
-    let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
+    unsafe { SHCreateShellItemArrayFromIDLists(&pidls).map_err(|e| e.message()) }
+}
 
-    let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
-    unsafe { op.CopyItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
-    unsafe { op.PerformOperations().map_err(|e| e.message()) }
+fn execute(op: IFileOperation) -> Result<(), String> {
+    let result = unsafe { op.PerformOperations() };
+
+    if result.is_err() {
+        if unsafe { op.GetAnyOperationsAborted().map_err(|e| e.message()) }?.as_bool() {
+            return Ok(());
+        } else {
+            return result.map_err(|e| e.message());
+        }
+    }
+
+    Ok(())
 }

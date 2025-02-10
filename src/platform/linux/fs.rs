@@ -135,6 +135,18 @@ fn register_cancellable(cancel_id: u32) -> Cancellable {
 }
 
 pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>) -> Result<(), String> {
+    execute_copy(source_file, dest_file, cancel_id, true)?;
+    clean_up(cancel_id);
+    Ok(())
+}
+
+pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>) -> Result<(), String> {
+    execute_copy(source_file, dest_file, cancel_id, false)?;
+    clean_up(cancel_id);
+    Ok(())
+}
+
+fn execute_copy<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>, is_move: bool) -> Result<(), String> {
     let source = File::for_parse_name(source_file.as_ref().to_str().unwrap());
     let dest = File::for_parse_name(dest_file.as_ref().to_str().unwrap());
 
@@ -145,45 +157,26 @@ pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, canc
     };
 
     match source.copy(&dest, FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Some(&cancellable_token), None) {
-        Ok(_) => after_copy(&source, true)?,
-        Err(e) => handel_error(e, &source, &dest, true, true)?,
+        Ok(_) => after_copy(&source, is_move)?,
+        Err(e) => handel_error(e, &source, &dest, true, is_move)?,
     };
-
-    clean_up(cancel_id);
-
-    Ok(())
-}
-
-pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    let source = File::for_parse_name(source_file.as_ref().to_str().unwrap());
-    let dest = File::for_parse_name(dest_file.as_ref().to_str().unwrap());
-
-    let cancellable_token = if let Some(id) = cancel_id {
-        register_cancellable(id)
-    } else {
-        Cancellable::new()
-    };
-
-    source.copy(&dest, FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Some(&cancellable_token), None).map_err(|e| e.message().to_string())?;
-
-    clean_up(cancel_id);
 
     Ok(())
 }
 
 pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    inner_mv_bulk(source_files, dest_dir, cancel_id, true)?;
+    execute_copy_all(source_files, dest_dir, cancel_id, true)?;
     clean_up(cancel_id);
     Ok(())
 }
 
 pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    inner_mv_bulk(source_files, dest_dir, cancel_id, false)?;
+    execute_copy_all(source_files, dest_dir, cancel_id, false)?;
     clean_up(cancel_id);
     Ok(())
 }
 
-fn inner_mv_bulk<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>, is_move: bool) -> Result<(), String> {
+fn execute_copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>, is_move: bool) -> Result<(), String> {
     let sources: Vec<File> = source_files.iter().map(|f| File::for_parse_name(f.as_ref().to_str().unwrap())).collect();
 
     if dest_dir.as_ref().is_file() {
@@ -252,6 +245,28 @@ fn clean_up(cancel_id: Option<u32>) {
             }
         }
     }
+}
+
+pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
+    if file_path.as_ref().is_dir() {
+        let files = readdir(file_path, false, false)?;
+        for file in files {
+            delete(file.full_path)?;
+        }
+    } else {
+        let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
+        file.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+    }
+
+    Ok(())
+}
+
+pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
+    for file_path in file_paths {
+        delete(file_path)?;
+    }
+
+    Ok(())
 }
 
 pub fn cancel(id: u32) -> bool {
