@@ -1,3 +1,4 @@
+pub mod dialog;
 mod platform;
 use std::path::PathBuf;
 
