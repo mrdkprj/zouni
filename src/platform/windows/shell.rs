@@ -21,7 +21,7 @@ use windows::{
                 ShellExecuteExW, TaskbarList, ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS,
                 THB_ICON, THB_TOOLTIP, THUMBBUTTON,
             },
-            WindowsAndMessaging::{CreateIconIndirect, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
+            WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
         },
     },
 };
@@ -111,6 +111,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                     let mut icon_path = PWSTR::null();
                     let mut index = 0;
                     let icon_location = unsafe { handler.GetIconLocation(&mut icon_path, &mut index) };
+
                     let uwp = if icon_location.is_ok() {
                         is_uwp(icon_path)
                     } else {
@@ -222,9 +223,28 @@ fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String>
             return Err("Failed to retrieve pixel data".to_string());
         }
 
+        let mut alpha = 0;
+        for i in (0..(width * height * 4)).step_by(4) {
+            alpha += pixel_data[(i + 3) as usize];
+        }
+
+        // If transparent
+        if alpha == 0 {
+            for y in 0..height {
+                for x in 0..width {
+                    let i = (y * width + x) * 4;
+                    if pixel_data[(i + 3) as usize] == 0 {
+                        // Set fully opaque if alpha was 0
+                        pixel_data[(i + 3) as usize] = 255;
+                    }
+                }
+            }
+        }
+
         let _ = unsafe { DeleteDC(hdc) };
         let _ = unsafe { DeleteObject(icon_info.hbmColor) };
         let _ = unsafe { DeleteObject(icon_info.hbmMask) };
+        let _ = unsafe { DestroyIcon(hicon) };
 
         return Ok(RgbaIcon {
             rgba: pixel_data,
