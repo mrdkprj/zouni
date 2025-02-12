@@ -223,9 +223,9 @@ fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String>
             return Err("Failed to retrieve pixel data".to_string());
         }
 
-        let mut alpha = 0;
+        let mut alpha = 0u32;
         for i in (0..(width * height * 4)).step_by(4) {
-            alpha += pixel_data[(i + 3) as usize];
+            alpha += pixel_data[(i + 3) as usize] as u32;
         }
 
         // If transparent
