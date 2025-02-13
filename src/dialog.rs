@@ -163,7 +163,7 @@ async fn pick_multiple(dialog: AsyncFileDialog, pic_file: bool) -> FileDialogRes
     if let Some(results) = results {
         let mut file_paths = Vec::new();
         for result in results {
-            file_paths.push(result.path().join(result.file_name()).to_string_lossy().to_string());
+            file_paths.push(result.path().to_string_lossy().to_string());
         }
 
         return FileDialogResult {
@@ -185,7 +185,7 @@ async fn pick_single(dialog: AsyncFileDialog, pic_file: bool) -> FileDialogResul
     if let Some(result) = result {
         return FileDialogResult {
             canceled: false,
-            file_paths: vec![result.path().join(result.file_name()).to_string_lossy().to_string()],
+            file_paths: vec![result.path().to_string_lossy().to_string()],
         };
     }
 
@@ -224,7 +224,7 @@ pub async fn save(options: SaveDialogOptions) -> FileDialogResult {
     if let Some(result) = result {
         return FileDialogResult {
             canceled: false,
-            file_paths: vec![result.path().join(result.file_name()).to_string_lossy().to_string()],
+            file_paths: vec![result.path().to_string_lossy().to_string()],
         };
     }
 
