@@ -62,6 +62,22 @@ pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path:
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
+pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    let _ = ComGuard::new();
+
+    let app_path = encode_wide(app_path.as_ref());
+    let file_path = encode_wide(file_path.as_ref());
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        hwnd: HWND::default(),
+        lpFile: PCWSTR::from_raw(app_path.as_ptr()),
+        lpParameters: PCWSTR::from_raw(file_path.as_ptr()),
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
+}
+
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _ = ComGuard::new();
 

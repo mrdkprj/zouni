@@ -21,9 +21,14 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     gio::AppInfo::launch_default_for_uri(&uri, AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
-pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(_file_path: P1, _app_path: P2) -> Result<(), String> {
-    let info = gio::AppInfo::create_from_commandline(_app_path.as_ref(), None, AppInfoCreateFlags::NONE).map_err(|e| e.message().to_string())?;
-    info.launch(&[File::for_path(_file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
+pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    let info = gio::AppInfo::create_from_commandline(app_path.as_ref(), None, AppInfoCreateFlags::NONE).map_err(|e| e.message().to_string())?;
+    info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
+}
+
+pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    let info = gio::AppInfo::create_from_commandline(app_path.as_ref(), None, AppInfoCreateFlags::NEEDS_TERMINAL).map_err(|e| e.message().to_string())?;
+    info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
