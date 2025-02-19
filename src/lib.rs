@@ -1,5 +1,6 @@
 pub mod dialog;
 mod platform;
+pub mod process;
 use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]

@@ -20,14 +20,16 @@ path = "src/lib.rs"
 [dependencies]
 serde = {version = "1.0.145", features = ["derive"]}
 mime_guess = "=2.0.5"
+once_cell = "1.19.0"
+async-std = "1.13.0"
+shared_child = "=1.0.1"
 rfd = { version = "0.15", default-features = false, features = [
   "gtk3",
   "common-controls-v6",
 ] }
 
-[target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.58"
-features = [
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
   "Foundation",
   "Win32_Storage_FileSystem",
   "Win32_Security",
@@ -49,20 +51,14 @@ features = [
   "ApplicationModel",
   "Foundation_Collections",
   "ApplicationModel_Core",
-]
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_Media_MediaFoundation",
+  "Win32_System_Threading",
+]}
+windows-core = "0.58.0"
 
-[target.'cfg(target_os = "windows")'.dependencies.windows-core]
-version = "0.58.0"
-
-[target.'cfg(target_os = "linux")'.dependencies.gio]
-version = "0.18.4"
-features = ["v2_70"]
-
-[target.'cfg(target_os = "linux")'.dependencies.gtk]
-version = "0.18.2"
-
-[target.'cfg(target_os = "linux")'.dependencies.once_cell]
-version = "1.19.0"
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"
 
 [profile.release]
 opt-level = "s"

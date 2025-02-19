@@ -1,4 +1,7 @@
-use super::util::{decode_wide, encode_wide, ComGuard};
+use super::{
+    guid::guid_to_string,
+    util::{decode_wide, encode_wide, ComGuard},
+};
 use crate::{AppInfo, RgbaIcon, ThumbButton};
 use std::{
     collections::HashMap,
@@ -17,9 +20,10 @@ use windows::{
         System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER},
         UI::{
             Shell::{
-                DefSubclassProc, ExtractIconExW, ITaskbarList3, RemoveWindowSubclass, SHAssocEnumHandlers, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass,
-                ShellExecuteExW, TaskbarList, ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS,
-                THB_ICON, THB_TOOLTIP, THUMBBUTTON,
+                DefSubclassProc, ExtractIconExW, ITaskbarList3,
+                PropertiesSystem::{IPropertyStore, PSGetNameFromPropertyKey, SHGetPropertyStoreFromParsingName, GPS_DEFAULT, PROPERTYKEY},
+                RemoveWindowSubclass, SHAssocEnumHandlers, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW, TaskbarList,
+                ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
             },
             WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
         },
@@ -495,4 +499,86 @@ fn LOWORD(dword: u32) -> u16 {
 #[allow(non_snake_case)]
 fn HIWORD(dword: u32) -> u16 {
     ((dword & 0xFFFF_0000) >> 16) as u16
+}
+
+pub fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
+    let _ = ComGuard::new();
+
+    let mut result = HashMap::new();
+    let wide = encode_wide(file_path.as_ref());
+    let store: IPropertyStore = unsafe { SHGetPropertyStoreFromParsingName(PCWSTR::from_raw(wide.as_ptr()), None, GPS_DEFAULT).unwrap() };
+
+    let count = unsafe { store.GetCount().unwrap() };
+    for i in 0..count {
+        let mut propkey = PROPERTYKEY::default();
+
+        if unsafe { store.GetAt(i, &mut propkey).is_ok() } {
+            if let Ok(propvalue) = unsafe { store.GetValue(&propkey) } {
+                if let Ok(keyname) = unsafe { PSGetNameFromPropertyKey(&propkey) } {
+                    let key = unsafe { keyname.to_string().unwrap().replace("System", "").replace('.', "") };
+                    let value = propvalue.to_string();
+                    result.insert(key, value.to_string());
+                };
+            }
+        }
+    }
+
+    result
+}
+
+const MEDIA_KEYS: [&str; 24] = [
+    "AudioChannelCount",
+    "AudioEncodingBitrate",
+    "AudioFormat",
+    "AudioSampleRate",
+    "AudioSampleSize",
+    "AudioStreamNumber",
+    "ItemPathDisplay",
+    "DRMIsProtected",
+    "MediaDlnaProfileID",
+    "MediaDuration",
+    "Size",
+    "VideoCompression",
+    "VideoEncodingBitrate",
+    "VideoFourCC",
+    "VideoFrameHeight",
+    "VideoFrameWidth",
+    "VideoFrameRate",
+    "VideoHorizontalAspectRatio",
+    "VideoIsSpherical",
+    "VideoIsStereo",
+    "VideoOrientation",
+    "VideoStreamNumber",
+    "VideoTotalBitrate",
+    "VideoVerticalAspectRatio",
+];
+
+pub fn media_metadata<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
+    let props = read_properties(file_path);
+    let mut result = HashMap::new();
+    for key in props.keys() {
+        if MEDIA_KEYS.contains(&key.as_str()) {
+            match key.as_str() {
+                "AudioFormat" | "VideoCompression" => {
+                    result.insert(key.to_string(), guid_to_string(props.get(key).unwrap()).to_string());
+                }
+
+                "VideoFourCC" => {
+                    result.insert(key.to_string(), fourcc_to_string(props.get(key).unwrap()));
+                }
+
+                _ => {
+                    result.insert(key.to_string(), props.get(key).unwrap().to_string());
+                }
+            };
+        }
+    }
+
+    result
+}
+
+fn fourcc_to_string(fourcc_str: &str) -> String {
+    let fourcc: u32 = fourcc_str.parse().unwrap();
+    let bytes = fourcc.to_le_bytes();
+    format!("{}{}{}{}", bytes[0] as char, bytes[1] as char, bytes[2] as char, bytes[3] as char)
 }

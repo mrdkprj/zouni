@@ -1,17 +1,20 @@
 use super::util::init;
 use crate::{Dirent, FileAttribute, Volume};
-use gio::{
-    ffi::{G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
+use gtk::{
+    gio::{
+        ffi::{G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
+        traits::{CancellableExt, DriveExt, FileExt, MountExt, VolumeExt, VolumeMonitorExt},
+        Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType, IOErrorEnum, VolumeMonitor,
+    },
     glib::Error,
-    prelude::{CancellableExt, DriveExt, FileExt, MountExt, VolumeExt, VolumeMonitorExt},
-    Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType, IOErrorEnum, VolumeMonitor,
 };
 use once_cell::sync::Lazy;
 use std::{collections::HashMap, path::Path, sync::Mutex};
 
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*";
+const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system";
+const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     init();
@@ -84,9 +87,13 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
 
 pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-    let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
-
+    let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
     Ok(to_file_attribute(&info))
+}
+
+pub(crate) fn stat_inner<P: AsRef<Path>>(file_path: P) -> Result<FileInfo, String> {
+    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
+    file.query_info(ATTRIBUTES_FOR_DIALOG, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())
 }
 
 fn to_file_attribute(info: &FileInfo) -> FileAttribute {
@@ -94,7 +101,7 @@ fn to_file_attribute(info: &FileInfo) -> FileAttribute {
         is_directory: info.file_type() == FileType::Directory,
         is_read_only: info.boolean("filesystem::readonly"),
         is_hidden: info.is_hidden(),
-        is_system: info.file_type() == FileType::Special,
+        is_system: info.boolean("dos::is-system"),
         is_device: info.file_type() == FileType::Mountable,
         is_file: info.file_type() == FileType::Regular,
         is_symbolic_link: info.file_type() == FileType::SymbolicLink,
@@ -123,7 +130,7 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String
         return Ok(String::new());
     }
 
-    let (ctype, _) = gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap()), &[0]);
+    let (ctype, _) = gtk::gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap()), &[0]);
     Ok(ctype.to_string())
 }
 

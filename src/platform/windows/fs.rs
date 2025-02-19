@@ -1,8 +1,11 @@
-use super::util::{decode_wide, encode_wide, prefixed, ComGuard};
+use super::{
+    shell,
+    util::{decode_wide, encode_wide, prefixed, ComGuard},
+};
 use crate::{Dirent, FileAttribute, Volume};
 use std::path::Path;
 use windows::{
-    core::{PCWSTR, PWSTR},
+    core::PCWSTR,
     Win32::{
         Foundation::{HANDLE, MAX_PATH},
         Storage::FileSystem::{
@@ -10,10 +13,9 @@ use windows::{
             GetVolumePathNamesForVolumeNameW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM,
             FIND_FIRST_EX_FLAGS, WIN32_FIND_DATAW,
         },
-        System::Com::{CoCreateInstance, CLSCTX_ALL, CLSCTX_INPROC_SERVER},
+        System::Com::{CoCreateInstance, CLSCTX_ALL},
         UI::Shell::{
-            CLSID_QueryAssociations, Common::ITEMIDLIST, FileOperation, IFileOperation, IQueryAssociations, IShellItem, IShellItemArray, SHCreateItemFromParsingName,
-            SHCreateShellItemArrayFromIDLists, SHParseDisplayName, ASSOCF_NONE, ASSOCSTR_CONTENTTYPE, FOF_ALLOWUNDO,
+            Common::ITEMIDLIST, FileOperation, IFileOperation, IShellItem, IShellItemArray, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHParseDisplayName, FOF_ALLOWUNDO,
         },
     },
 };
@@ -139,19 +141,13 @@ pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
 }
 
 #[allow(dead_code)]
-fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
-    let _ = ComGuard::new();
-
-    let query_associations: IQueryAssociations = unsafe { CoCreateInstance(&CLSID_QueryAssociations, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
-
-    let wide = encode_wide(file_path.as_ref());
-    unsafe { query_associations.Init(ASSOCF_NONE, PCWSTR::from_raw(wide.as_ptr()), None, None).map_err(|e| e.message()) }?;
-    let mut mime_type_ptr = [0u16; 256];
-    let mime_type = PWSTR::from_raw(mime_type_ptr.as_mut_ptr());
-    let mut mime_len = unsafe { mime_type.len() } as u32;
-    unsafe { query_associations.GetString(ASSOCF_NONE, ASSOCSTR_CONTENTTYPE, None, mime_type, &mut mime_len).map_err(|e| e.message()) }?;
-    let content_type = decode_wide(unsafe { mime_type.as_wide() });
-    Ok(content_type)
+fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> String {
+    let props = shell::read_properties(file_path);
+    if props.contains_key("MIMEType") {
+        props.get("MIMEType").unwrap().to_string()
+    } else {
+        String::new()
+    }
 }
 
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
