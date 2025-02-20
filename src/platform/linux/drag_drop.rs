@@ -2,6 +2,10 @@ use crate::{platform::linux::util::init, Operation};
 use gtk::{prelude::WidgetExt, TargetEntry};
 
 pub fn start_drag(file_paths: Vec<String>, _operation: Operation) -> Result<(), String> {
+    if file_paths.is_empty() {
+        return Ok(());
+    }
+
     init();
 
     let widgets = gtk::Window::list_toplevels();
