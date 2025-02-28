@@ -113,6 +113,11 @@ pub async fn message(options: MessageDialogOptions) -> bool {
                 break;
             }
         }
+
+        if label.is_empty() && options.buttons.len() > 1 {
+            label = options.buttons.last().unwrap().to_string();
+        }
+
         label
     };
 

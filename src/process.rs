@@ -12,9 +12,9 @@ use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpawnOption {
-    pub program: String,
-    pub args: Option<Vec<String>>,
-    pub cancellation_token: String,
+    program: String,
+    args: Option<Vec<String>>,
+    cancellation_token: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

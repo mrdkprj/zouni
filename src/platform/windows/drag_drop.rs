@@ -15,10 +15,6 @@ use windows::{
 };
 
 pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), String> {
-    if file_paths.is_empty() {
-        return Ok(());
-    }
-
     let _ = ComGuard::new();
 
     let pidls: Vec<*const ITEMIDLIST> = file_paths
