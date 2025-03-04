@@ -3,19 +3,26 @@ use super::{
     util::{decode_wide, encode_wide, prefixed, ComGuard},
 };
 use crate::{Dirent, FileAttribute, Volume};
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 use windows::{
-    core::PCWSTR,
+    core::{PCSTR, PCWSTR, VARIANT},
     Win32::{
-        Foundation::{HANDLE, MAX_PATH},
+        Foundation::{HANDLE, HWND, MAX_PATH, S_OK},
         Storage::FileSystem::{
             FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetVolumeInformationW,
             GetVolumePathNamesForVolumeNameW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM,
             FIND_FIRST_EX_FLAGS, WIN32_FIND_DATAW,
         },
-        System::Com::{CoCreateInstance, CLSCTX_ALL},
+        System::{
+            Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
+            Variant::{VariantChangeType, VariantClear, VAR_CHANGE_FLAGS, VT_DATE},
+        },
         UI::Shell::{
-            Common::ITEMIDLIST, FileOperation, IFileOperation, IShellItem, IShellItemArray, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHParseDisplayName, FOF_ALLOWUNDO,
+            Common::{ITEMIDLIST, STRRET},
+            FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray,
+            PropertiesSystem::PROPERTYKEY,
+            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, KF_FLAG_DEFAULT,
+            PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
         },
     },
 };
@@ -232,6 +239,7 @@ pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), Stri
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
     unsafe { op.MoveItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -244,6 +252,7 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
     unsafe { op.MoveItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -257,6 +266,7 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
     unsafe { op.CopyItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -269,6 +279,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
     unsafe { op.CopyItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -316,7 +327,7 @@ pub fn trash_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     execute(op)
 }
 
-fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
+pub fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
     let pidls: Vec<*const ITEMIDLIST> = from
         .iter()
         .map(|path| {
@@ -328,7 +339,9 @@ fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
         .collect::<windows::core::Result<_>>()
         .map_err(|e| e.message())?;
 
-    unsafe { SHCreateShellItemArrayFromIDLists(&pidls).map_err(|e| e.message()) }
+    let array = unsafe { SHCreateShellItemArrayFromIDLists(&pidls).map_err(|e| e.message()) };
+    unsafe { CoTaskMemFree(Some(pidls.as_ptr() as _)) };
+    array
 }
 
 fn execute(op: IFileOperation) -> Result<(), String> {
@@ -339,6 +352,105 @@ fn execute(op: IFileOperation) -> Result<(), String> {
             return Ok(());
         } else {
             return result.map_err(|e| e.message());
+        }
+    }
+
+    Ok(())
+}
+
+const DATE: PROPERTYKEY = PROPERTYKEY {
+    fmtid: PSGUID_DISPLACED,
+    pid: PID_DISPLACED_DATE,
+};
+
+struct ItemData {
+    date: f64,
+    item: *mut ITEMIDLIST,
+}
+
+pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
+    let _ = ComGuard::new();
+
+    let recycle_bin_item: *mut ITEMIDLIST = unsafe { SHGetKnownFolderIDList(&FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT.0 as _, None).map_err(|e| e.message()) }?;
+    let desktop: IShellFolder = unsafe { SHGetDesktopFolder().map_err(|e| e.message()) }?;
+    let pbc = unsafe { windows::Win32::System::Com::CreateBindCtx(0).map_err(|e| e.message()) }?;
+    let recycle_bin: IShellFolder2 = unsafe { desktop.BindToObject(recycle_bin_item, &pbc).map_err(|e| e.message()) }?;
+    unsafe { CoTaskMemFree(Some(recycle_bin_item as _)) };
+
+    let mut enum_list: Option<IEnumIDList> = None;
+    let _ = unsafe { recycle_bin.EnumObjects(HWND::default(), (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as _, &mut enum_list) };
+
+    if enum_list.is_none() {
+        return Ok(());
+    }
+
+    let list = enum_list.unwrap();
+    let mut rgelt: Vec<*mut ITEMIDLIST> = vec![std::ptr::null_mut()];
+    let cnt: Option<*mut u32> = None;
+
+    let mut map: HashMap<String, ItemData> = HashMap::new();
+
+    while unsafe { list.Next(&mut rgelt, cnt) } == S_OK {
+        if rgelt.is_empty() {
+            continue;
+        }
+
+        let item = *(rgelt.first().unwrap());
+
+        let mut street: STRRET = STRRET::default();
+        unsafe { recycle_bin.GetDisplayNameOf(item, SHGDN_NORMAL, &mut street).map_err(|e| e.message()) }?;
+        let old_path = decode_wide(unsafe { street.Anonymous.pOleStr.as_wide() });
+
+        let mut src = unsafe { recycle_bin.GetDetailsEx(item, &DATE).map_err(|e| e.message()) }?;
+        let mut variant = VARIANT::default();
+        unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_DATE).map_err(|e| e.message()) }?;
+        let date = unsafe { variant.as_raw().Anonymous.Anonymous.Anonymous.date };
+        unsafe { VariantClear(&mut variant).map_err(|e| e.message()) }?;
+        unsafe { VariantClear(&mut src).map_err(|e| e.message()) }?;
+
+        if file_paths.contains(&old_path) {
+            let data = ItemData {
+                date,
+                item,
+            };
+
+            if map.contains_key(&old_path) {
+                let old = map.get(&old_path).unwrap();
+                if old.date < date {
+                    let old = map.insert(old_path, data).unwrap();
+                    unsafe { CoTaskMemFree(Some(old.item as _)) };
+                }
+            } else {
+                map.insert(old_path, data);
+            }
+        } else {
+            unsafe { CoTaskMemFree(Some(item as _)) };
+        }
+
+        rgelt = vec![std::ptr::null_mut()];
+    }
+
+    let items: Vec<*const ITEMIDLIST> = map.values().map(|a| a.item as _).collect();
+
+    if !items.is_empty() {
+        let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
+        let invoke = CMINVOKECOMMANDINFO {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
+            lpVerb: PCSTR(b"undelete\0".as_ptr()),
+            ..Default::default()
+        };
+
+        match unsafe { menu.InvokeCommand(&invoke) } {
+            Ok(_) => {
+                for item in items {
+                    unsafe { CoTaskMemFree(Some(item as _)) };
+                }
+            }
+            Err(_) => {
+                for item in items {
+                    unsafe { CoTaskMemFree(Some(item as _)) };
+                }
+            }
         }
     }
 

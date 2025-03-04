@@ -1,7 +1,4 @@
-use super::{
-    guid::guid_to_string,
-    util::{decode_wide, encode_wide, ComGuard},
-};
+use super::util::{decode_wide, encode_wide, ComGuard};
 use crate::{AppInfo, RgbaIcon, ThumbButton};
 use std::{
     collections::HashMap,
@@ -524,61 +521,4 @@ pub fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> 
     }
 
     result
-}
-
-const MEDIA_KEYS: [&str; 24] = [
-    "AudioChannelCount",
-    "AudioEncodingBitrate",
-    "AudioFormat",
-    "AudioSampleRate",
-    "AudioSampleSize",
-    "AudioStreamNumber",
-    "ItemPathDisplay",
-    "DRMIsProtected",
-    "MediaDlnaProfileID",
-    "MediaDuration",
-    "Size",
-    "VideoCompression",
-    "VideoEncodingBitrate",
-    "VideoFourCC",
-    "VideoFrameHeight",
-    "VideoFrameWidth",
-    "VideoFrameRate",
-    "VideoHorizontalAspectRatio",
-    "VideoIsSpherical",
-    "VideoIsStereo",
-    "VideoOrientation",
-    "VideoStreamNumber",
-    "VideoTotalBitrate",
-    "VideoVerticalAspectRatio",
-];
-
-pub fn media_metadata<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
-    let props = read_properties(file_path);
-    let mut result = HashMap::new();
-    for key in props.keys() {
-        if MEDIA_KEYS.contains(&key.as_str()) {
-            match key.as_str() {
-                "AudioFormat" | "VideoCompression" => {
-                    result.insert(key.to_string(), guid_to_string(props.get(key).unwrap()).to_string());
-                }
-
-                "VideoFourCC" => {
-                    result.insert(key.to_string(), fourcc_to_string(props.get(key).unwrap()));
-                }
-
-                _ => {
-                    result.insert(key.to_string(), props.get(key).unwrap().to_string());
-                }
-            };
-        }
-    }
-
-    result
-}
-
-fn fourcc_to_string(fourcc_str: &str) -> String {
-    let fourcc: u32 = fourcc_str.parse().unwrap();
-    let bytes = fourcc.to_le_bytes();
-    format!("{}{}{}{}", bytes[0] as char, bytes[1] as char, bytes[2] as char, bytes[3] as char)
 }
