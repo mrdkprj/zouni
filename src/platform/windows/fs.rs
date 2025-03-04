@@ -328,19 +328,21 @@ pub fn trash_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 }
 
 pub fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
-    let pidls: Vec<*const ITEMIDLIST> = from
+    let items: Vec<*const ITEMIDLIST> = from
         .iter()
         .map(|path| {
-            let mut pidl = std::ptr::null_mut();
+            let mut item = std::ptr::null_mut();
             let wide_str = encode_wide(prefixed(path.as_ref()));
-            unsafe { SHParseDisplayName(PCWSTR::from_raw(wide_str.as_ptr()), None, &mut pidl, 0, None) }?;
-            Ok(pidl as *const _)
+            unsafe { SHParseDisplayName(PCWSTR::from_raw(wide_str.as_ptr()), None, &mut item, 0, None) }?;
+            Ok(item as *const _)
         })
         .collect::<windows::core::Result<_>>()
         .map_err(|e| e.message())?;
 
-    let array = unsafe { SHCreateShellItemArrayFromIDLists(&pidls).map_err(|e| e.message()) };
-    unsafe { CoTaskMemFree(Some(pidls.as_ptr() as _)) };
+    let array = unsafe { SHCreateShellItemArrayFromIDLists(&items).map_err(|e| e.message()) };
+    for item in items {
+        unsafe { CoTaskMemFree(Some(item as _)) };
+    }
     array
 }
 
