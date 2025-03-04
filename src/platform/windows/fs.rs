@@ -21,8 +21,8 @@ use windows::{
             Common::{ITEMIDLIST, STRRET},
             FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray,
             PropertiesSystem::PROPERTYKEY,
-            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, KF_FLAG_DEFAULT,
-            PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
+            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMMKDIR,
+            KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
         },
     },
 };
@@ -291,6 +291,7 @@ pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_NOCONFIRMMKDIR).map_err(|e| e.message()) }?;
     unsafe { op.DeleteItem(&shell_item, None).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -301,6 +302,7 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     let item_array = get_id_lists(file_paths)?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_NOCONFIRMMKDIR).map_err(|e| e.message()) }?;
     unsafe { op.DeleteItems(&item_array).map_err(|e| e.message()) }?;
     execute(op)
 }
