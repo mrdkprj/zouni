@@ -135,8 +135,3 @@ pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     Ok(())
 }
-
-#[allow(unused_variables)]
-pub fn media_metadata<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
-    HashMap::new();
-}

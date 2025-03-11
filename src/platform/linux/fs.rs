@@ -9,7 +9,11 @@ use gtk::{
     glib::Error,
 };
 use once_cell::sync::Lazy;
-use std::{collections::HashMap, path::Path, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -297,4 +301,49 @@ pub fn cancel(id: u32) -> bool {
     }
 
     false
+}
+
+const TRASH_PATH_STR: &str = "trash:///";
+
+pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
+    let trash_file = File::for_uri(TRASH_PATH_STR);
+    let trash_path = PathBuf::from(TRASH_PATH_STR);
+
+    if let Ok(children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        let mut map: HashMap<String, i64> = HashMap::new();
+        for child in children {
+            if child.is_err() {
+                continue;
+            }
+
+            let info = child.unwrap();
+            let old_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
+                path.to_string()
+            } else {
+                String::new()
+            };
+
+            let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
+            let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
+
+            if file_paths.contains(&old_path) {
+                if map.contains_key(&old_path) {
+                    let old_date = *map.get(&old_path).unwrap();
+                    if old_date < date {
+                        let _ = map.insert(old_path, date).unwrap();
+                    }
+                } else {
+                    map.insert(old_path, date);
+                }
+            }
+        }
+
+        let items: Vec<PathBuf> = map.keys().map(|item| PathBuf::from(item)).collect();
+        for item in items {
+            let source_file = trash_path.join(item.file_name().unwrap());
+            mv(source_file, item, None)?;
+        }
+    }
+
+    Ok(())
 }

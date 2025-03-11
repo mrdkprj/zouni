@@ -1,13 +1,15 @@
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use shared_child::SharedChild;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::HashMap,
     io::Read,
-    os::windows::process::CommandExt,
     process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
