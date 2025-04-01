@@ -7,7 +7,10 @@ use windows::{
         Foundation::*,
         System::{
             Com::{CoTaskMemFree, IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL},
-            Ole::{DoDragDrop, IDropSource, IDropSource_Impl, ReleaseStgMedium, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
+            Ole::{
+                DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE,
+                DROPEFFECT_NONE,
+            },
             SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS},
         },
         UI::Shell::{Common::ITEMIDLIST, SHCreateDataObject, SHParseDisplayName, DROPFILES},
@@ -111,7 +114,7 @@ pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), S
 }
 
 #[implement(IDropSource)]
-pub struct DragDropTarget;
+struct DragDropTarget;
 
 #[allow(non_snake_case)]
 impl IDropSource_Impl for DragDropTarget_Impl {
@@ -129,5 +132,37 @@ impl IDropSource_Impl for DragDropTarget_Impl {
 
     fn GiveFeedback(&self, _dweffect: DROPEFFECT) -> HRESULT {
         DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+pub fn register(hwnd: HWND) -> Result<(), String> {
+    let _ = unregister(hwnd);
+    let drag_drop_target: IDropTarget = DropTarget.into();
+    unsafe { RegisterDragDrop(hwnd, &drag_drop_target).map_err(|e| e.message()) }
+}
+
+pub fn unregister(hwnd: HWND) -> Result<(), String> {
+    unsafe { RevokeDragDrop(hwnd).map_err(|e| e.message()) }
+}
+
+#[implement(IDropTarget)]
+struct DropTarget;
+
+#[allow(non_snake_case)]
+impl IDropTarget_Impl for DropTarget_Impl {
+    fn DragEnter(&self, _pDataObj: Option<&IDataObject>, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn DragOver(&self, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn Drop(&self, _pDataObj: Option<&IDataObject>, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
+        Ok(())
     }
 }
