@@ -233,8 +233,8 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
 pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let _ = ComGuard::new();
 
-    let from_wide = encode_wide(prefixed(from.as_ref()));
-    let to_wide = encode_wide(prefixed(to.as_ref()));
+    let from_wide = encode_wide(from.as_ref());
+    let to_wide = encode_wide(to.as_ref());
     let from_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(from_wide.as_ptr()), None).map_err(|e| e.message()) }?;
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
@@ -248,7 +248,8 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
     let _ = ComGuard::new();
 
     let from_item_array = get_id_lists(from)?;
-    let to_wide = encode_wide(prefixed(to.as_ref()));
+    println!("{:?}", from_item_array);
+    let to_wide = encode_wide(to.as_ref());
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
@@ -260,8 +261,8 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let _ = ComGuard::new();
 
-    let from_wide = encode_wide(prefixed(from.as_ref()));
-    let to_wide = encode_wide(prefixed(to.as_ref()));
+    let from_wide = encode_wide(from.as_ref());
+    let to_wide = encode_wide(to.as_ref());
     let from_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(from_wide.as_ptr()), None).map_err(|e| e.message()) }?;
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
@@ -275,7 +276,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
     let _ = ComGuard::new();
 
     let from_item_array = get_id_lists(from)?;
-    let to_wide = encode_wide(prefixed(to.as_ref()));
+    let to_wide = encode_wide(to.as_ref());
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
@@ -287,7 +288,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
 pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _ = ComGuard::new();
 
-    let file_wide = encode_wide(prefixed(file_path.as_ref()));
+    let file_wide = encode_wide(file_path.as_ref());
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
@@ -310,7 +311,7 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _ = ComGuard::new();
 
-    let file_wide = encode_wide(prefixed(file_path.as_ref()));
+    let file_wide = encode_wide(file_path.as_ref());
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
@@ -334,7 +335,7 @@ pub fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, Strin
         .iter()
         .map(|path| {
             let mut item = std::ptr::null_mut();
-            let wide_str = encode_wide(prefixed(path.as_ref()));
+            let wide_str = encode_wide(path.as_ref());
             unsafe { SHParseDisplayName(PCWSTR::from_raw(wide_str.as_ptr()), None, &mut item, 0, None) }?;
             Ok(item as *const _)
         })
@@ -342,6 +343,7 @@ pub fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, Strin
         .map_err(|e| e.message())?;
 
     let array = unsafe { SHCreateShellItemArrayFromIDLists(&items).map_err(|e| e.message()) };
+    println!("2");
     for item in items {
         unsafe { CoTaskMemFree(Some(item as _)) };
     }
