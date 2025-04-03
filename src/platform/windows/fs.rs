@@ -248,7 +248,6 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
     let _ = ComGuard::new();
 
     let from_item_array = get_id_lists(from)?;
-    println!("{:?}", from_item_array);
     let to_wide = encode_wide(to.as_ref());
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
@@ -343,7 +342,7 @@ pub fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, Strin
         .map_err(|e| e.message())?;
 
     let array = unsafe { SHCreateShellItemArrayFromIDLists(&items).map_err(|e| e.message()) };
-    println!("2");
+
     for item in items {
         unsafe { CoTaskMemFree(Some(item as _)) };
     }
