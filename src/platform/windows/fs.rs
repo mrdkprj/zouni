@@ -266,7 +266,11 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
-    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION).map_err(|e| e.message()) }?;
+    if from.as_ref().parent().unwrap() == to.as_ref() {
+        unsafe { op.SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION).map_err(|e| e.message()) }?;
+    } else {
+        unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
+    }
     unsafe { op.CopyItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -279,7 +283,12 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
-    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION).map_err(|e| e.message()) }?;
+    let from_sample = from.first().unwrap();
+    if from_sample.as_ref().parent().unwrap() == to.as_ref() {
+        unsafe { op.SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION).map_err(|e| e.message()) }?;
+    } else {
+        unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
+    }
     unsafe { op.CopyItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
     execute(op)
 }
