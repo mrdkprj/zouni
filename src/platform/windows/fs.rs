@@ -22,7 +22,7 @@ use windows::{
             FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray,
             PropertiesSystem::PROPERTYKEY,
             SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
-            KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
+            FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
         },
     },
 };
@@ -266,7 +266,7 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
-    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION).map_err(|e| e.message()) }?;
     unsafe { op.CopyItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
     execute(op)
 }
@@ -279,7 +279,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
     let to_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(to_wide.as_ptr()), None).map_err(|e| e.message()) }?;
 
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
-    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
+    unsafe { op.SetOperationFlags(FOF_ALLOWUNDO | FOF_RENAMEONCOLLISION).map_err(|e| e.message()) }?;
     unsafe { op.CopyItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
     execute(op)
 }
