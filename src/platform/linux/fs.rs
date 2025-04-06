@@ -1,5 +1,6 @@
-use super::util::init;
+// use super::util::init;
 use crate::{Dirent, FileAttribute, Volume};
+#[allow(unused_imports)]
 use gtk::{
     gio::{
         ffi::{G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
@@ -9,6 +10,7 @@ use gtk::{
     glib::Error,
 };
 use once_cell::sync::Lazy;
+use serde_json::Value;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -21,6 +23,45 @@ const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-
 const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
+    let mut volumes = Vec::new();
+    let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().unwrap(); //.map_err(|e| e.to_string())?;
+    let data: Value = serde_json::from_str(std::str::from_utf8(&output.stdout).unwrap()).map_err(|e| e.to_string())?;
+    let drives: Vec<&Value> = data["blockdevices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|dev| {
+            let fstype = dev["fstype"].as_str().unwrap_or_default();
+            !dev["mountpoint"].is_null() && fstype != "swap"
+        })
+        .collect();
+
+    for drive in drives {
+        let mut volume_label = if drive["label"].is_null() {
+            String::new()
+        } else {
+            drive["label"].to_string()
+        };
+        volume_label.push_str(if drive["vendor"].is_null() {
+            ""
+        } else {
+            drive["vendor"].as_str().unwrap_or_default()
+        });
+        volume_label.push_str(if drive["model"].is_null() {
+            ""
+        } else {
+            drive["model"].as_str().unwrap_or_default()
+        });
+        volumes.push(Volume {
+            mount_point: drive["mountpoint"].as_str().unwrap().to_string(),
+            volume_label,
+            available_units: drive["fsavail"].as_u64().unwrap_or_default(),
+            total_units: drive["size"].as_u64().unwrap_or_default(),
+        });
+    }
+
+    Ok(volumes)
+    /*
     init();
 
     let mut volumes = Vec::new();
@@ -44,6 +85,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     }
 
     Ok(volumes)
+     */
 }
 
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
