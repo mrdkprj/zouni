@@ -55,10 +55,10 @@ pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
 
     let urls: Vec<String> = clipboard.wait_for_uris().iter().map(|gs| gs.to_string()).collect();
 
-    return Ok(ClipboardData {
+    Ok(ClipboardData {
         operation: Operation::None,
         urls,
-    });
+    })
 }
 
 pub fn write_uris(_window_handle: isize, paths: &[String], _operation: Operation) -> Result<(), String> {

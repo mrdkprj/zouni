@@ -8,7 +8,7 @@ pub fn start_drag(file_paths: Vec<String>, _operation: Operation) -> Result<(), 
     if widgets.is_empty() {
         return Ok(());
     }
-    let widget = widgets.get(0).unwrap();
+    let widget = widgets.first().unwrap();
 
     let targets = gtk::TargetList::new(&[TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 0)]);
 

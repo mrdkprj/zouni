@@ -1,11 +1,9 @@
-// use super::util::init;
 use crate::{Dirent, FileAttribute, Volume};
-#[allow(unused_imports)]
 use gtk::{
     gio::{
         ffi::{G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
-        traits::{CancellableExt, DriveExt, FileExt, MountExt, VolumeExt, VolumeMonitorExt},
-        Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType, IOErrorEnum, VolumeMonitor,
+        traits::{CancellableExt, FileExt},
+        Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType, IOErrorEnum,
     },
     glib::Error,
 };
@@ -24,19 +22,26 @@ const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,st
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes = Vec::new();
-    let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().unwrap(); //.map_err(|e| e.to_string())?;
+    let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,TYPE,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().unwrap(); //.map_err(|e| e.to_string())?;
     let data: Value = serde_json::from_str(std::str::from_utf8(&output.stdout).unwrap()).map_err(|e| e.to_string())?;
-    let drives: Vec<&Value> = data["blockdevices"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|dev| {
-            let fstype = dev["fstype"].as_str().unwrap_or_default();
-            !dev["mountpoint"].is_null() && fstype != "swap"
-        })
-        .collect();
+    let drives: Vec<&Value> = data["blockdevices"].as_array().unwrap().iter().filter(|dev| dev["type"].as_str().unwrap_or_default() == "disk").collect();
 
     for drive in drives {
+        let mut available_units = 0;
+        let mut total_units = 0;
+        let mut mount_point = String::new();
+
+        if !drive["children"].is_null() {
+            for child in drive["children"].as_array().unwrap().iter() {
+                let child_mount_point = child["mountpoint"].as_str().unwrap();
+                if !child_mount_point.contains("boot") {
+                    mount_point = child_mount_point.to_string();
+                }
+                total_units += child["size"].as_u64().unwrap_or_default();
+                available_units += child["fsavail"].as_u64().unwrap_or_default();
+            }
+        }
+
         let mut volume_label = if drive["label"].is_null() {
             String::new()
         } else {
@@ -53,39 +58,14 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
             drive["model"].as_str().unwrap_or_default()
         });
         volumes.push(Volume {
-            mount_point: drive["mountpoint"].as_str().unwrap().to_string(),
-            volume_label,
-            available_units: drive["fsavail"].as_u64().unwrap_or_default(),
-            total_units: drive["size"].as_u64().unwrap_or_default(),
-        });
-    }
-
-    Ok(volumes)
-    /*
-    init();
-
-    let mut volumes = Vec::new();
-    let monitor = VolumeMonitor::get();
-
-    for drive in monitor.connected_drives() {
-        let mount_point = if drive.has_volumes() {
-            drive.volumes().first().unwrap().get_mount().map(|m| m.default_location().to_string()).unwrap_or_else(|| String::new())
-        } else {
-            String::new()
-        };
-
-        let volume_label = drive.name().to_string();
-
-        volumes.push(Volume {
             mount_point,
             volume_label,
-            available_units: 0,
-            total_units: 0,
+            available_units,
+            total_units,
         });
     }
 
     Ok(volumes)
-     */
 }
 
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
@@ -96,35 +76,34 @@ pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bo
     let file = File::for_parse_name(directory.as_ref().to_str().unwrap());
 
     let mut entries = Vec::new();
-    try_readdir(file, &mut entries, recursive, with_mime_type).map_err(|e| e)?;
+    try_readdir(file, &mut entries, recursive, with_mime_type)?;
 
     Ok(entries)
 }
 
 fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
-    for child in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap() {
-        if let Ok(info) = child {
-            let name = info.name();
-            let mut full_path = dir.path().unwrap().to_path_buf();
-            full_path.push(name.clone());
-            let mime_type = if with_mime_type {
-                get_mime_type(&full_path)
-            } else {
-                String::new()
-            };
+    for info in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
+        let name = info.name();
+        let mut full_path = dir.path().unwrap().to_path_buf();
+        full_path.push(name.clone());
 
-            entries.push(Dirent {
-                name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
-                parent_path: dir.to_string(),
-                full_path: full_path.to_string_lossy().to_string(),
-                attributes: to_file_attribute(&info),
-                mime_type,
-            });
+        let mime_type = if with_mime_type {
+            get_mime_type(&full_path)
+        } else {
+            String::new()
+        };
 
-            if info.file_type() == FileType::Directory && recursive {
-                let next_dir = File::for_path(full_path);
-                try_readdir(next_dir, entries, recursive, with_mime_type)?;
-            }
+        entries.push(Dirent {
+            name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            parent_path: dir.path().unwrap().to_string_lossy().to_string(),
+            full_path: full_path.to_string_lossy().to_string(),
+            attributes: to_file_attribute(&info),
+            mime_type,
+        });
+
+        if info.file_type() == FileType::Directory && recursive {
+            let next_dir = File::for_path(full_path);
+            try_readdir(next_dir, entries, recursive, with_mime_type)?;
         }
     }
 
@@ -280,7 +259,7 @@ fn handel_error(e: Error, source: &File, dest: &File, treat_cancel_as_error: boo
     }
 
     if !e.matches(IOErrorEnum::Cancelled) {
-        return Err(format!("File: {}, Message: {}", source, e.message().to_string()));
+        return Err(format!("File: {}, Message: {}", source, e.message()));
     }
 
     if treat_cancel_as_error && e.matches(IOErrorEnum::Cancelled) {
@@ -380,7 +359,7 @@ pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
             }
         }
 
-        let items: Vec<PathBuf> = map.keys().map(|item| PathBuf::from(item)).collect();
+        let items: Vec<PathBuf> = map.keys().map(PathBuf::from).collect();
         for item in items {
             let source_file = trash_path.join(item.file_name().unwrap());
             mv(source_file, item, None)?;

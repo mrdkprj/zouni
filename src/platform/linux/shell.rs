@@ -26,7 +26,7 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let message = vec![
         format!("Name: {}", file_path.as_ref().file_name().unwrap_or_default().to_string_lossy()),
         format!("File Type: {}", file_path.as_ref().extension().unwrap_or_default().to_string_lossy()),
-        format!("Location: {}", file_path.as_ref().parent().unwrap_or(&Path::new("")).to_string_lossy()),
+        format!("Location: {}", file_path.as_ref().parent().unwrap_or(Path::new("")).to_string_lossy()),
         format!("Size: {}", info.size()),
         format!("Created Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::created") as _)),
         format!("Last Modified Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::modified") as _)),
