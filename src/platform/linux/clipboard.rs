@@ -1,8 +1,5 @@
 use crate::{ClipboardData, Operation};
-use gtk::{
-    gdk::{SELECTION_CLIPBOARD, SELECTION_PRIMARY},
-    TargetEntry, TargetFlags,
-};
+use gtk::{gdk::SELECTION_PRIMARY, TargetEntry, TargetFlags};
 
 use super::util::init;
 
@@ -20,14 +17,14 @@ pub fn read_text(_window_handle: isize) -> Result<String, String> {
         return Ok(String::new());
     }
 
-    let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
+    let clipboard = gtk::Clipboard::get(&SELECTION_PRIMARY);
     Ok(clipboard.wait_for_text().unwrap_or_default().to_string())
 }
 
 pub fn write_text(_window_handle: isize, text: String) -> Result<(), String> {
     init();
 
-    let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
+    let clipboard = gtk::Clipboard::get(&SELECTION_PRIMARY);
     clipboard.set_text(&text);
 
     Ok(())
@@ -51,7 +48,7 @@ pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
         return Ok(data);
     }
 
-    let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
+    let clipboard = gtk::Clipboard::get(&SELECTION_PRIMARY);
 
     let urls: Vec<String> = clipboard.wait_for_uris().iter().map(|gs| gs.to_string()).collect();
 
@@ -64,7 +61,7 @@ pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
 pub fn write_uris(_window_handle: isize, paths: &[String], _operation: Operation) -> Result<(), String> {
     init();
 
-    let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
+    let clipboard = gtk::Clipboard::get(&SELECTION_PRIMARY);
 
     let targets = &[TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP, 0)];
     let urls = paths.to_vec();

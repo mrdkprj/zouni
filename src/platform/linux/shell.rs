@@ -106,7 +106,6 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
             icon,
         });
     }
-    println!("{:?}", apps);
     apps
 }
 

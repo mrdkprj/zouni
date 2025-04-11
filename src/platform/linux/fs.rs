@@ -3,22 +3,19 @@ use gtk::{
     gio::{
         ffi::{G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
         traits::{CancellableExt, FileExt},
-        Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType, IOErrorEnum,
+        Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType,
     },
-    glib::Error,
+    glib::IsA,
 };
 use once_cell::sync::Lazy;
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Mutex,
-};
+use std::{collections::HashMap, path::Path, sync::Mutex};
 
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system";
 const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
+const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes = Vec::new();
@@ -166,107 +163,153 @@ fn register_cancellable(cancel_id: u32) -> Cancellable {
     token
 }
 
-pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    execute_copy(source_file, dest_file, cancel_id, true)?;
-    clean_up(cancel_id);
-    Ok(())
-}
-
-pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    execute_copy(source_file, dest_file, cancel_id, false)?;
-    clean_up(cancel_id);
-    Ok(())
-}
-
-fn execute_copy<P1: AsRef<Path>, P2: AsRef<Path>>(source_file: P1, dest_file: P2, cancel_id: Option<u32>, is_move: bool) -> Result<(), String> {
-    let source = File::for_parse_name(source_file.as_ref().to_str().unwrap());
-    let dest = File::for_parse_name(dest_file.as_ref().to_str().unwrap());
-
-    let cancellable_token = if let Some(id) = cancel_id {
+pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancel_id: Option<u32>) -> Result<(), String> {
+    let cancellable = if let Some(id) = cancel_id {
         register_cancellable(id)
     } else {
         Cancellable::new()
     };
 
-    match source.copy(&dest, FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Some(&cancellable_token), None) {
-        Ok(_) => after_copy(&source, is_move)?,
-        Err(e) => handel_error(e, &source, &dest, true, is_move)?,
-    };
-
-    Ok(())
-}
-
-pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    execute_copy_all(source_files, dest_dir, cancel_id, true)?;
+    let result = execute_move(
+        from,
+        to,
+        if cancel_id.is_some() {
+            Some(&cancellable)
+        } else {
+            Cancellable::NONE
+        },
+    );
     clean_up(cancel_id);
-    Ok(())
+
+    result
 }
 
-pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>) -> Result<(), String> {
-    execute_copy_all(source_files, dest_dir, cancel_id, false)?;
-    clean_up(cancel_id);
-    Ok(())
-}
-
-fn execute_copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(source_files: &[P1], dest_dir: P2, cancel_id: Option<u32>, is_move: bool) -> Result<(), String> {
-    let sources: Vec<File> = source_files.iter().map(|f| File::for_parse_name(f.as_ref().to_str().unwrap())).collect();
-
-    if dest_dir.as_ref().is_file() {
-        return Err("Destination is file".to_string());
-    }
-
-    let mut dest_files: Vec<File> = Vec::new();
-
-    for source_file in source_files {
-        let name = source_file.as_ref().file_name().unwrap();
-        let dest_file = dest_dir.as_ref().join(name);
-        dest_files.push(File::for_parse_name(dest_file.to_str().unwrap()));
-    }
-
-    let cancellable_token = if let Some(id) = cancel_id {
+pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, cancel_id: Option<u32>) -> Result<(), String> {
+    let cancellable = if let Some(id) = cancel_id {
         register_cancellable(id)
     } else {
         Cancellable::new()
     };
 
-    for (i, source) in sources.iter().enumerate() {
-        let dest = dest_files.get(i).unwrap();
+    let result: Result<(), String> = froms.iter().try_for_each(|from| {
+        execute_move(
+            from,
+            &to,
+            if cancel_id.is_some() {
+                Some(&cancellable)
+            } else {
+                Cancellable::NONE
+            },
+        )
+    });
 
-        let done = match source.copy(dest, FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Some(&cancellable_token), None) {
-            Ok(_) => after_copy(source, is_move)?,
-            Err(e) => handel_error(e, source, dest, true, is_move)?,
-        };
+    clean_up(cancel_id);
 
-        if !done {
-            break;
+    result
+}
+
+fn execute_move<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable: Option<&impl IsA<Cancellable>>) -> Result<(), String> {
+    let source = File::for_parse_name(from.as_ref().to_str().unwrap());
+    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest = File::for_parse_name(to_dr.to_str().unwrap());
+
+    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() {
+        println!("del");
+        delete(to_dr)?;
+    }
+
+    source.move_(&dest, FileCopyFlags::from_bits(G_FILE_COPY_ALL_METADATA).unwrap(), cancellable, None).map_err(|e| e.message().to_string())
+}
+
+pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancel_id: Option<u32>) -> Result<(), String> {
+    let cancellable = if let Some(id) = cancel_id {
+        register_cancellable(id)
+    } else {
+        Cancellable::new()
+    };
+
+    let result = execute_copy(
+        from,
+        to,
+        if cancel_id.is_some() {
+            Some(&cancellable)
+        } else {
+            Cancellable::NONE
+        },
+    );
+    clean_up(cancel_id);
+
+    result
+}
+
+pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, cancel_id: Option<u32>) -> Result<(), String> {
+    let cancellable = if let Some(id) = cancel_id {
+        register_cancellable(id)
+    } else {
+        Cancellable::new()
+    };
+
+    let result: Result<(), String> = froms.iter().try_for_each(|from| {
+        execute_copy(
+            from,
+            &to,
+            if cancel_id.is_some() {
+                Some(&cancellable)
+            } else {
+                Cancellable::NONE
+            },
+        )
+    });
+
+    clean_up(cancel_id);
+
+    result
+}
+
+fn execute_copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable: Option<&impl IsA<Cancellable>>) -> Result<(), String> {
+    if from.as_ref().is_dir() {
+        return copy_directory(from, to, cancellable);
+    }
+
+    let source = File::for_parse_name(from.as_ref().to_str().unwrap());
+    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest = File::for_parse_name(to_dr.to_str().unwrap());
+
+    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() {
+        println!("del");
+        delete(to_dr)?;
+    }
+
+    source.copy(&dest, FileCopyFlags::from_bits(G_FILE_COPY_ALL_METADATA).unwrap(), cancellable, None).map_err(|e| e.message().to_string())
+}
+
+fn copy_directory<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable: Option<&impl IsA<Cancellable>>) -> Result<(), String> {
+    let source = File::for_parse_name(from.as_ref().to_str().unwrap());
+    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest = File::for_parse_name(to_dr.to_str().unwrap());
+
+    if !dest.query_exists(Cancellable::NONE) {
+        dest.make_directory(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+
+        let settable_attributes = dest.query_settable_attributes(Cancellable::NONE).unwrap();
+        let attributes_info = settable_attributes.attributes();
+        let attributes = attributes_info.iter().map(|a| a.name()).collect::<Vec<&str>>().join(",");
+        let info = source.query_info(&attributes, FileQueryInfoFlags::from_bits(gtk::gio::ffi::G_FILE_QUERY_INFO_NONE).unwrap(), Cancellable::NONE).unwrap();
+        dest.set_attributes_from_info(&info, FileQueryInfoFlags::from_bits(gtk::gio::ffi::G_FILE_QUERY_INFO_NONE).unwrap(), Cancellable::NONE).unwrap();
+    }
+
+    if let Ok(mut children) = source.enumerate_children(ATTRIBUTES_FOR_COPY, FileQueryInfoFlags::from_bits(gtk::gio::ffi::G_FILE_QUERY_INFO_NONE).unwrap(), Cancellable::NONE) {
+        while let Some(Ok(info)) = children.next() {
+            let from_file = from.as_ref().to_path_buf().join(info.name());
+            if info.file_type() == FileType::Directory {
+                copy_directory(from_file, &to_dr, cancellable)?;
+            } else {
+                execute_copy(from_file, &to_dr, cancellable)?;
+            }
         }
     }
 
     Ok(())
-}
-
-fn after_copy(source: &File, is_move: bool) -> Result<bool, String> {
-    if is_move {
-        source.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-    }
-
-    Ok(true)
-}
-
-fn handel_error(e: Error, source: &File, dest: &File, treat_cancel_as_error: bool, is_move: bool) -> Result<bool, String> {
-    if is_move && dest.query_exists(Cancellable::NONE) {
-        dest.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-    }
-
-    if !e.matches(IOErrorEnum::Cancelled) {
-        return Err(format!("File: {}, Message: {}", source, e.message()));
-    }
-
-    if treat_cancel_as_error && e.matches(IOErrorEnum::Cancelled) {
-        return Ok(false);
-    }
-
-    Ok(true)
 }
 
 fn clean_up(cancel_id: Option<u32>) {
@@ -281,14 +324,14 @@ fn clean_up(cancel_id: Option<u32>) {
 
 pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     if file_path.as_ref().is_dir() {
-        let files = readdir(file_path, false, false)?;
+        let files = readdir(&file_path, false, false)?;
         for file in files {
             delete(file.full_path)?;
         }
-    } else {
-        let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-        file.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
     }
+
+    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
+    file.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
 
     Ok(())
 }
@@ -324,21 +367,20 @@ pub fn cancel(id: u32) -> bool {
     false
 }
 
+struct TrashData {
+    date: i64,
+    name: String,
+}
+
 const TRASH_PATH_STR: &str = "trash:///";
 
 pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
     let trash_file = File::for_uri(TRASH_PATH_STR);
-    let trash_path = PathBuf::from(TRASH_PATH_STR);
 
-    if let Ok(children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
-        let mut map: HashMap<String, i64> = HashMap::new();
-        for child in children {
-            if child.is_err() {
-                continue;
-            }
-
-            let info = child.unwrap();
-            let old_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
+    if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        let mut map: HashMap<String, TrashData> = HashMap::new();
+        while let Some(Ok(info)) = children.next() {
+            let orig_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
                 path.to_string()
             } else {
                 String::new()
@@ -347,22 +389,37 @@ pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
             let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
             let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
 
-            if file_paths.contains(&old_path) {
-                if map.contains_key(&old_path) {
-                    let old_date = *map.get(&old_path).unwrap();
-                    if old_date < date {
-                        let _ = map.insert(old_path, date).unwrap();
+            if file_paths.contains(&orig_path) {
+                if map.contains_key(&orig_path) {
+                    let trash_data = map.get(&orig_path).unwrap();
+                    if trash_data.date < date {
+                        let _ = map.insert(
+                            orig_path,
+                            TrashData {
+                                date,
+                                name: info.name().to_string_lossy().to_string(),
+                            },
+                        );
                     }
                 } else {
-                    map.insert(old_path, date);
+                    let _ = map.insert(
+                        orig_path,
+                        TrashData {
+                            date,
+                            name: info.name().to_string_lossy().to_string(),
+                        },
+                    );
                 }
             }
         }
 
-        let items: Vec<PathBuf> = map.keys().map(PathBuf::from).collect();
-        for item in items {
-            let source_file = trash_path.join(item.file_name().unwrap());
-            mv(source_file, item, None)?;
+        for (orig_path, trash_data) in map.iter() {
+            let mut trash_path = String::from(TRASH_PATH_STR);
+            trash_path.push_str(&trash_data.name);
+
+            File::for_uri(&trash_path)
+                .move_(&File::for_parse_name(orig_path), FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Cancellable::NONE, None)
+                .map_err(|e| e.message().to_string())?;
         }
     }
 
