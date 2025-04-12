@@ -28,15 +28,15 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
         format!("File Type: {}", file_path.as_ref().extension().unwrap_or_default().to_string_lossy()),
         format!("Location: {}", file_path.as_ref().parent().unwrap_or(Path::new("")).to_string_lossy()),
         format!("Size: {}", info.size()),
-        format!("Created Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::created") as _)),
-        format!("Last Modified Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::modified") as _)),
-        format!("Last Access Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::access") as _)),
+        format!("Created Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::created") as _).unwrap().format_iso8601().unwrap()),
+        format!("Last Modified Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::modified") as _).unwrap().format_iso8601().unwrap()),
+        format!("Last Access Date: {:?}", DateTime::from_unix_local(info.attribute_uint64("time::access") as _).unwrap().format_iso8601().unwrap()),
         format!("Readonly: {}", info.boolean("filesystem::readonly")),
         format!("Hidden: {}", info.is_hidden()),
     ]
     .join("\r\n");
     let options = MessageDialogOptions {
-        title: Some(file_path.as_ref().to_string_lossy().to_string()),
+        title: Some(file_path.as_ref().file_name().unwrap().to_string_lossy().to_string()),
         kind: Some(dialog::MessageDialogKind::Info),
         buttons: Vec::new(),
         message,

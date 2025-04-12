@@ -214,7 +214,6 @@ fn execute_move<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable:
     let dest = File::for_parse_name(to_dr.to_str().unwrap());
 
     if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() {
-        println!("del");
         delete(to_dr)?;
     }
 
@@ -276,7 +275,6 @@ fn execute_copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable:
     let dest = File::for_parse_name(to_dr.to_str().unwrap());
 
     if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() {
-        println!("del");
         delete(to_dr)?;
     }
 
