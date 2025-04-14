@@ -10,6 +10,7 @@ use windows::{
     Management::Deployment::PackageManager,
     Win32::{
         Foundation::{GENERIC_READ, HWND, LPARAM, LRESULT, MAX_PATH, WPARAM},
+        Globalization::{GetLocaleInfoEx, LOCALE_SNAME},
         Graphics::{
             Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
             Imaging::{CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand},
@@ -521,4 +522,11 @@ pub fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> 
     }
 
     result
+}
+
+pub fn get_locale() -> String {
+    let size = unsafe { GetLocaleInfoEx(PCWSTR::null(), LOCALE_SNAME, None) };
+    let mut locale = vec![0u16; size as _];
+    let _ = unsafe { GetLocaleInfoEx(PCWSTR::null(), LOCALE_SNAME, Some(&mut locale)) };
+    decode_wide(locale.as_slice())
 }
