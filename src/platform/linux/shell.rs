@@ -134,3 +134,11 @@ pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     Ok(())
 }
+
+pub fn get_locale() -> String {
+    if let Some(language) = gtk::default_language() {
+        language.to_string()
+    } else {
+        String::new()
+    }
+}
