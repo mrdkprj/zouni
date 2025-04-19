@@ -294,10 +294,8 @@ fn execute_move<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable:
     let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
     let dest = File::for_parse_name(to_dr.to_str().unwrap());
 
-    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() {
-        if handle_result(delete(to_dr), &sender) {
-            return;
-        }
+    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() && handle_result(delete(to_dr), &sender) {
+        return;
     }
 
     source.move_async(&dest, FileCopyFlags::from_bits(G_FILE_COPY_ALL_METADATA).unwrap(), gtk::glib::Priority::DEFAULT, Some(cancellable), None, move |result| {
@@ -323,10 +321,8 @@ fn execute_copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable:
     let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
     let dest = File::for_parse_name(to_dr.to_str().unwrap());
 
-    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() {
-        if handle_result(delete(to_dr), &sender) {
-            return;
-        }
+    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() && handle_result(delete(to_dr), &sender) {
+        return;
     }
 
     source.copy_async(&dest, FileCopyFlags::from_bits(G_FILE_COPY_ALL_METADATA).unwrap(), gtk::glib::Priority::DEFAULT, Some(cancellable), None, move |result| {
