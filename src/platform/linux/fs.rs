@@ -38,24 +38,32 @@ const IO_CANCEL: &str = "IO_CANCEL";
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes = Vec::new();
-    let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,TYPE,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().unwrap(); //.map_err(|e| e.to_string())?;
+    let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,TYPE,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().map_err(|e| e.to_string())?;
     let data: Value = serde_json::from_str(std::str::from_utf8(&output.stdout).unwrap()).map_err(|e| e.to_string())?;
-    let drives: Vec<&Value> = data["blockdevices"].as_array().unwrap().iter().filter(|dev| dev["type"].as_str().unwrap_or_default() == "disk").collect();
+    let drives: Vec<&Value> = data["blockdevices"].as_array().unwrap().iter().filter(|dev| dev["type"].as_str().unwrap_or_default() == "disk" && dev["mountpoint"].as_str().is_some()).collect();
+    let exclude_mount_points = ["boot", "[SWAP]", "swap"];
 
     for drive in drives {
         let mut available_units = 0;
         let mut total_units = 0;
         let mut mount_point = String::new();
 
-        if !drive["children"].is_null() {
+        if drive["children"].is_null() {
+            let drive_mount_point = drive["mountpoint"].as_str().unwrap_or_default();
+            mount_point = drive_mount_point.to_string();
+            total_units += drive["size"].as_u64().unwrap_or_default();
+            available_units += drive["fsavail"].as_u64().unwrap_or_default();
+        } else {
             for child in drive["children"].as_array().unwrap().iter() {
-                let child_mount_point = child["mountpoint"].as_str().unwrap();
-                if !child_mount_point.contains("boot") {
-                    mount_point = child_mount_point.to_string();
-                }
+                let child_mount_point = child["mountpoint"].as_str().unwrap_or_default();
+                mount_point = child_mount_point.to_string();
                 total_units += child["size"].as_u64().unwrap_or_default();
                 available_units += child["fsavail"].as_u64().unwrap_or_default();
             }
+        }
+
+        if mount_point.is_empty() || exclude_mount_points.contains(&mount_point.as_str()) {
+            continue;
         }
 
         let mut volume_label = if drive["label"].is_null() {
