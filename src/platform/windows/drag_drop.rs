@@ -2,7 +2,7 @@ use super::util::{encode_wide, ComGuard};
 use crate::{platform::windows::util::GlobalMemory, Operation};
 use std::mem::ManuallyDrop;
 use windows::{
-    core::{implement, HRESULT, PCWSTR},
+    core::{implement, Ref, BOOL, HRESULT, PCWSTR},
     Win32::{
         Foundation::*,
         System::{
@@ -150,7 +150,7 @@ struct DropTarget;
 
 #[allow(non_snake_case)]
 impl IDropTarget_Impl for DropTarget_Impl {
-    fn DragEnter(&self, _pDataObj: Option<&IDataObject>, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
+    fn DragEnter(&self, _pDataObj: Ref<IDataObject>, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
         Ok(())
     }
 
@@ -162,7 +162,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         Ok(())
     }
 
-    fn Drop(&self, _pDataObj: Option<&IDataObject>, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
+    fn Drop(&self, _pDataObj: Ref<IDataObject>, _grfKeyState: MODIFIERKEYS_FLAGS, _pt: &POINTL, _pdwEffect: *mut DROPEFFECT) -> windows::core::Result<()> {
         Ok(())
     }
 }

@@ -9,7 +9,7 @@ use windows::{
     core::{HSTRING, PCWSTR, PWSTR},
     Management::Deployment::PackageManager,
     Win32::{
-        Foundation::{GENERIC_READ, HWND, LPARAM, LRESULT, MAX_PATH, WPARAM},
+        Foundation::{GENERIC_READ, HWND, LPARAM, LRESULT, MAX_PATH, PROPERTYKEY, WPARAM},
         Globalization::{GetLocaleInfoEx, LOCALE_SNAME},
         Graphics::{
             Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
@@ -19,7 +19,7 @@ use windows::{
         UI::{
             Shell::{
                 DefSubclassProc, ExtractIconExW, ITaskbarList3,
-                PropertiesSystem::{IPropertyStore, PSGetNameFromPropertyKey, SHGetPropertyStoreFromParsingName, GPS_DEFAULT, PROPERTYKEY},
+                PropertiesSystem::{IPropertyStore, PSGetNameFromPropertyKey, SHGetPropertyStoreFromParsingName, GPS_DEFAULT},
                 RemoveWindowSubclass, SHAssocEnumHandlers, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW, TaskbarList,
                 ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
             },
@@ -207,14 +207,14 @@ fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String>
 
         // Retrieve bitmap details
         let mut bitmap = BITMAP::default();
-        if unsafe { GetObjectW(icon_info.hbmColor, std::mem::size_of::<BITMAP>() as i32, Some(&mut bitmap as *mut _ as *mut _)) } == 0 {
+        if unsafe { GetObjectW(icon_info.hbmColor.into(), std::mem::size_of::<BITMAP>() as i32, Some(&mut bitmap as *mut _ as *mut _)) } == 0 {
             return Err("Failed to get bitmap details".to_string());
         }
 
         let width = bitmap.bmWidth as u32;
         let height = bitmap.bmHeight as u32;
 
-        let hdc = unsafe { CreateCompatibleDC(HDC::default()) };
+        let hdc = unsafe { CreateCompatibleDC(Some(HDC::default())) };
         if hdc.is_invalid() {
             return Err("Failed to create compatible DC".to_string());
         }
@@ -235,7 +235,7 @@ fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String>
         let mut pixel_data: Vec<u8> = vec![0; (width * height * 4) as usize];
 
         // Retrieve the RGBA pixel data
-        unsafe { SelectObject(hdc, icon_info.hbmColor) };
+        unsafe { SelectObject(hdc, icon_info.hbmColor.into()) };
         if unsafe { GetDIBits(hdc, icon_info.hbmColor, 0, height, Some(pixel_data.as_mut_ptr() as *mut _), &mut bitmap_info, DIB_RGB_COLORS) } == 0 {
             let _ = unsafe { DeleteDC(hdc) };
             return Err("Failed to retrieve pixel data".to_string());
@@ -260,8 +260,8 @@ fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String>
         }
 
         let _ = unsafe { DeleteDC(hdc) };
-        let _ = unsafe { DeleteObject(icon_info.hbmColor) };
-        let _ = unsafe { DeleteObject(icon_info.hbmMask) };
+        let _ = unsafe { DeleteObject(icon_info.hbmColor.into()) };
+        let _ = unsafe { DeleteObject(icon_info.hbmMask.into()) };
         let _ = unsafe { DestroyIcon(hicon) };
 
         return Ok(RgbaIcon {
@@ -435,7 +435,7 @@ fn create_hicon(file_path: &PathBuf) -> Result<HICON, String> {
 
     let hdc = unsafe { CreateCompatibleDC(None) };
     let mut bits_ptr: *mut u8 = std::ptr::null_mut();
-    let hbitmap = unsafe { CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits_ptr as *mut *mut u8 as *mut *mut _, None, 0).map_err(|e| e.message()) }?;
+    let hbitmap = unsafe { CreateDIBSection(Some(hdc), &bmi, DIB_RGB_COLORS, &mut bits_ptr as *mut *mut u8 as *mut *mut _, None, 0).map_err(|e| e.message()) }?;
 
     if hbitmap.is_invalid() || pixel_data.is_empty() {
         let _ = unsafe { DeleteDC(hdc) };
@@ -457,7 +457,7 @@ fn create_hicon(file_path: &PathBuf) -> Result<HICON, String> {
 
     let hicon = unsafe { CreateIconIndirect(&icon_info).map_err(|e| e.message()) }?;
 
-    let _ = unsafe { DeleteObject(hbitmap) };
+    let _ = unsafe { DeleteObject(hbitmap.into()) };
 
     Ok(hicon)
 }

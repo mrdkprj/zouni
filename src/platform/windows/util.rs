@@ -83,7 +83,7 @@ impl GlobalMemory {
 impl Drop for GlobalMemory {
     fn drop(&mut self) {
         if !self.handle.is_invalid() {
-            match unsafe { GlobalFree(self.handle) } {
+            match unsafe { GlobalFree(Some(self.handle)) } {
                 Ok(_) => {}
                 Err(e) => {
                     if e.code() != HRESULT(0x00000000) {

@@ -29,7 +29,7 @@ pub fn read_text(window_handle: isize) -> Result<String, String> {
 
     let mut text = String::new();
 
-    unsafe { OpenClipboard(HWND(window_handle as _)).map_err(|e| e.message()) }?;
+    unsafe { OpenClipboard(Some(HWND(window_handle as _))).map_err(|e| e.message()) }?;
 
     let format = if is_unicode_text_available() {
         CF_UNICODETEXT.0 as u32
@@ -69,7 +69,7 @@ pub fn read_text(window_handle: isize) -> Result<String, String> {
 }
 
 pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
-    unsafe { OpenClipboard(HWND(window_handle as _)).map_err(|e| e.message()) }?;
+    unsafe { OpenClipboard(Some(HWND(window_handle as _))).map_err(|e| e.message()) }?;
 
     unsafe { EmptyClipboard().map_err(|e| e.message()) }?;
 
@@ -83,7 +83,7 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
 
     hglobal.unlock();
 
-    if unsafe { SetClipboardData(CF_UNICODETEXT.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
+    if unsafe { SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(hglobal.handle().0))).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard".to_string());
     }
@@ -111,7 +111,7 @@ pub fn read_uris(window_handle: isize) -> Result<ClipboardData, String> {
 
     let mut urls = Vec::new();
 
-    unsafe { OpenClipboard(HWND(window_handle as _)).map_err(|e| e.message()) }?;
+    unsafe { OpenClipboard(Some(HWND(window_handle as _))).map_err(|e| e.message()) }?;
 
     let operation = get_preferred_drop_effect();
 
@@ -184,10 +184,10 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
 
     hglobal.unlock();
 
-    unsafe { OpenClipboard(HWND(window_handle as _)).map_err(|e| e.message()) }?;
+    unsafe { OpenClipboard(Some(HWND(window_handle as _))).map_err(|e| e.message()) }?;
     unsafe { EmptyClipboard().map_err(|e| e.message()) }?;
 
-    if unsafe { SetClipboardData(CF_HDROP.0 as u32, HANDLE(hglobal.handle().0)).is_err() } {
+    if unsafe { SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(hglobal.handle().0))).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard".to_string());
     }
@@ -208,7 +208,7 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
 
     let custom_format = unsafe { RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT) };
 
-    if unsafe { SetClipboardData(custom_format, HANDLE(hglobal_operation.handle().0)).is_err() } {
+    if unsafe { SetClipboardData(custom_format, Some(HANDLE(hglobal_operation.handle().0))).is_err() } {
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard format".to_string());
     }

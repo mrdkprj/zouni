@@ -5,9 +5,9 @@ use super::{
 use crate::{Dirent, FileAttribute, Volume};
 use std::{collections::HashMap, path::Path};
 use windows::{
-    core::{PCSTR, PCWSTR, VARIANT},
+    core::{PCSTR, PCWSTR},
     Win32::{
-        Foundation::{HANDLE, HWND, MAX_PATH, S_OK},
+        Foundation::{HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
         Storage::FileSystem::{
             FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetVolumeInformationW,
             GetVolumePathNamesForVolumeNameW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM,
@@ -15,19 +15,21 @@ use windows::{
         },
         System::{
             Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
-            Variant::{VariantChangeType, VariantClear, VAR_CHANGE_FLAGS, VT_DATE},
+            Variant::{VariantChangeType, VariantClear, VARIANT, VAR_CHANGE_FLAGS, VT_DATE},
         },
         UI::Shell::{
             Common::{ITEMIDLIST, STRRET},
-            FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray,
-            PropertiesSystem::PROPERTYKEY,
-            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
-            FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
+            FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray, SHCreateItemFromParsingName,
+            SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_RENAMEONCOLLISION,
+            KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
         },
     },
 };
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
+    println!("{:?}", std::path::Path::new(r"\\wsl.localhost").exists());
+    println!("{:?}", std::path::Path::new(r"\\wsl$\\").exists());
+    println!("{:?}", std::path::Path::new(r"FileSystem::\\wsl.localhost").exists());
     let mut volumes: Vec<Volume> = Vec::new();
 
     let mut volume_name = vec![0u16; MAX_PATH as usize];
@@ -72,7 +74,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     }
 
     unsafe { FindVolumeClose(handle).map_err(|e| e.message()) }?;
-
+    println!("{:?}", volumes);
     Ok(volumes)
 }
 
@@ -418,7 +420,7 @@ pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
         let mut src = unsafe { recycle_bin.GetDetailsEx(item, &DATE).map_err(|e| e.message()) }?;
         let mut variant = VARIANT::default();
         unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_DATE).map_err(|e| e.message()) }?;
-        let date = unsafe { variant.as_raw().Anonymous.Anonymous.Anonymous.date };
+        let date = unsafe { variant.Anonymous.Anonymous.Anonymous.date };
         unsafe { VariantClear(&mut variant).map_err(|e| e.message()) }?;
         unsafe { VariantClear(&mut src).map_err(|e| e.message()) }?;
 
