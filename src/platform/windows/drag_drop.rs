@@ -135,14 +135,14 @@ impl IDropSource_Impl for DragDropTarget_Impl {
     }
 }
 
-pub fn register(hwnd: HWND) -> Result<(), String> {
-    let _ = unregister(hwnd);
+pub fn register(window_handle: isize) -> Result<(), String> {
+    let _ = unregister(window_handle);
     let drag_drop_target: IDropTarget = DropTarget.into();
-    unsafe { RegisterDragDrop(hwnd, &drag_drop_target).map_err(|e| e.message()) }
+    unsafe { RegisterDragDrop(HWND(window_handle as _), &drag_drop_target).map_err(|e| e.message()) }
 }
 
-pub fn unregister(hwnd: HWND) -> Result<(), String> {
-    unsafe { RevokeDragDrop(hwnd).map_err(|e| e.message()) }
+pub fn unregister(window_handle: isize) -> Result<(), String> {
+    unsafe { RevokeDragDrop(HWND(window_handle as _)).map_err(|e| e.message()) }
 }
 
 #[implement(IDropTarget)]
