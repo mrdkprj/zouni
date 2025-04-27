@@ -27,9 +27,6 @@ use windows::{
 };
 
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
-    println!("{:?}", std::path::Path::new(r"\\wsl.localhost").exists());
-    println!("{:?}", std::path::Path::new(r"\\wsl$\\").exists());
-    println!("{:?}", std::path::Path::new(r"FileSystem::\\wsl.localhost").exists());
     let mut volumes: Vec<Volume> = Vec::new();
 
     let mut volume_name = vec![0u16; MAX_PATH as usize];
@@ -74,7 +71,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     }
 
     unsafe { FindVolumeClose(handle).map_err(|e| e.message()) }?;
-    println!("{:?}", volumes);
+
     Ok(volumes)
 }
 

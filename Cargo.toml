@@ -53,6 +53,7 @@ windows = { version = "0.60.0", features = [
   "Win32_UI_Shell_PropertiesSystem",
   "Win32_System_Threading",
   "Win32_System_Variant",
+  "Win32_Devices_DeviceAndDriverInstallation",
 ]}
 windows-core = "0.60.0"
 
