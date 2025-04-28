@@ -32,6 +32,7 @@ pub fn listen<F: FnMut(DeviceEvent) + 'static>(callback: F) -> bool {
     let mut config = HCMNOTIFICATION::default();
     let result = unsafe { CM_Register_Notification(&notify_type, Some(Box::into_raw(Box::new(callback)) as _), Some(on_notify::<F>), &mut config) };
     if result.0 == CR_SUCCESS.0 {
+        unlisten();
         *CONFIG.lock().unwrap() = config.0 as _;
         true
     } else {
