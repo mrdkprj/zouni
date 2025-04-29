@@ -46,7 +46,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
 
         if volume_label.is_empty() {
             volume_label = match unsafe { GetDriveTypeW(PCWSTR::from_raw(drive_paths.as_ptr())) } {
-                2 => "Removable Media".to_string(),
+                2 => "Removable Drive".to_string(),
                 3 => "Disk Drive".to_string(),
                 4 => "Network Drive".to_string(),
                 _ => "Unknown".to_string(),
