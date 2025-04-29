@@ -9,9 +9,9 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
         Storage::FileSystem::{
-            FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetVolumeInformationW,
-            GetVolumePathNamesForVolumeNameW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM,
-            FIND_FIRST_EX_FLAGS, WIN32_FIND_DATAW,
+            FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW,
+            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, WIN32_FIND_DATAW,
         },
         System::{
             Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
@@ -29,20 +29,29 @@ use windows::{
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes: Vec<Volume> = Vec::new();
 
-    let mut volume_name = vec![0u16; MAX_PATH as usize];
-    let handle = unsafe { FindFirstVolumeW(&mut volume_name).map_err(|e| e.message()) }?;
+    let mut volume_path_guid = vec![0u16; MAX_PATH as usize];
+    let handle = unsafe { FindFirstVolumeW(&mut volume_path_guid).map_err(|e| e.message()) }?;
 
     loop {
         let mut drive_paths = vec![0u16; (MAX_PATH + 1) as usize];
         let mut len = 0;
-        unsafe { GetVolumePathNamesForVolumeNameW(PCWSTR::from_raw(volume_name.as_ptr()), Some(&mut drive_paths), &mut len).map_err(|e| e.message()) }?;
+        unsafe { GetVolumePathNamesForVolumeNameW(PCWSTR::from_raw(volume_path_guid.as_ptr()), Some(&mut drive_paths), &mut len).map_err(|e| e.message()) }?;
 
         let mount_point = decode_wide(&drive_paths);
 
         let mut volume_label_ptr = vec![0u16; (MAX_PATH + 1) as usize];
-        unsafe { GetVolumeInformationW(PCWSTR(volume_name.as_ptr()), Some(&mut volume_label_ptr), None, None, None, None).map_err(|e| e.message()) }?;
+        unsafe { GetVolumeInformationW(PCWSTR(volume_path_guid.as_ptr()), Some(&mut volume_label_ptr), None, None, None, None).map_err(|e| e.message()) }?;
 
-        let volume_label = decode_wide(&volume_label_ptr);
+        let mut volume_label = decode_wide(&volume_label_ptr);
+
+        if volume_label.is_empty() {
+            volume_label = match unsafe { GetDriveTypeW(PCWSTR::from_raw(drive_paths.as_ptr())) } {
+                2 => "Removable Media".to_string(),
+                3 => "Disk Drive".to_string(),
+                4 => "Network Drive".to_string(),
+                _ => "Unknown".to_string(),
+            }
+        }
 
         if mount_point.is_empty() {
             volumes.push(Volume {
@@ -63,8 +72,8 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
             });
         }
 
-        volume_name = vec![0u16; MAX_PATH as usize];
-        let next = unsafe { FindNextVolumeW(handle, &mut volume_name) };
+        volume_path_guid = vec![0u16; MAX_PATH as usize];
+        let next = unsafe { FindNextVolumeW(handle, &mut volume_path_guid) };
         if next.is_err() {
             break;
         }

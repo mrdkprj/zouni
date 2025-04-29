@@ -3,12 +3,12 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use windows::{
-    core::{Error, GUID, PCWSTR},
+    core::{Error, GUID},
     Win32::{
         Devices::DeviceAndDriverInstallation::{
-            CM_Register_Notification, CM_Unregister_Notification, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDeviceInterfaceW, CM_NOTIFY_ACTION,
+            CM_Register_Notification, CM_Unregister_Notification, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, CM_NOTIFY_ACTION,
             CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL, CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL, CM_NOTIFY_EVENT_DATA, CM_NOTIFY_FILTER, CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES,
-            CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIODI_NO_ADD, HCMNOTIFICATION, SPDRP_CLASS, SP_DEVICE_INTERFACE_DATA, SP_DEVINFO_DATA,
+            CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE, CR_SUCCESS, DIGCF_DEVICEINTERFACE, HCMNOTIFICATION, SPDRP_CLASS, SP_DEVINFO_DATA,
         },
         Foundation::{ERROR_SUCCESS, MAX_PATH},
     },
@@ -53,8 +53,9 @@ unsafe extern "system" fn on_notify<F: FnMut(DeviceEvent)>(
             if data.FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE {
                 return 0;
             }
+
             let callback = &mut *(context as *mut F);
-            let name = get_device_type(data.u.DeviceInterface.ClassGuid, data.u.DeviceInterface.SymbolicLink.as_ptr()).unwrap_or_default();
+            let name = get_device_type(data.u.DeviceInterface.ClassGuid).unwrap_or_default();
             callback(DeviceEvent {
                 name,
                 event: if action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL {
@@ -69,15 +70,8 @@ unsafe extern "system" fn on_notify<F: FnMut(DeviceEvent)>(
     ERROR_SUCCESS.0
 }
 
-fn get_device_type(guid: GUID, symbolic_link: *const u16) -> Result<String, Error> {
+fn get_device_type(guid: GUID) -> Result<String, Error> {
     if let Ok(info) = unsafe { SetupDiGetClassDevsW(Some(&guid), None, None, DIGCF_DEVICEINTERFACE) } {
-        let mut device_interface_data = SP_DEVICE_INTERFACE_DATA {
-            cbSize: size_of::<SP_DEVICE_INTERFACE_DATA>() as u32,
-            ..Default::default()
-        };
-
-        unsafe { SetupDiOpenDeviceInterfaceW(info, Some(&PCWSTR::from_raw(symbolic_link)), DIODI_NO_ADD, Some(&mut device_interface_data)) }?;
-
         let mut data = SP_DEVINFO_DATA {
             cbSize: size_of::<SP_DEVINFO_DATA>() as _,
             ..Default::default()
