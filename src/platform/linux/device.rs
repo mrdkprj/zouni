@@ -61,18 +61,10 @@ impl<T: UsbContext> rusb::Hotplug<T> for HotPlugHandler {
     }
 }
 
+#[derive(Default)]
 struct Listener {
     context: Option<Context>,
     registration: Option<Registration<Context>>,
-}
-
-impl Default for Listener {
-    fn default() -> Self {
-        Self {
-            context: None,
-            registration: None,
-        }
-    }
 }
 
 pub fn listen<F: FnMut(DeviceEvent) + 'static + Send>(callback: F) -> bool {
@@ -89,6 +81,7 @@ pub fn listen<F: FnMut(DeviceEvent) + 'static + Send>(callback: F) -> bool {
             }),
         ) {
             unlisten();
+
             *LISTENER.lock().unwrap() = Listener {
                 context: Some(context),
                 registration: Some(registration),
