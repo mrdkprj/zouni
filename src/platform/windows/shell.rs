@@ -467,7 +467,7 @@ unsafe extern "system" fn subclass_proc(window: HWND, msg: u32, wparam: WPARAM, 
         WM_COMMAND => {
             let hiword = HIWORD(wparam.0 as _);
 
-            if hiword == THBN_CLICKED as _ {
+            if hiword == THBN_CLICKED as u16 {
                 let button_in = LOWORD(wparam.0 as _) as u32;
                 let inner = unsafe { &mut *(dwrefdata as *mut InnerThumbButtons) };
                 if let Some(id) = inner.id_map.get(&button_in) {

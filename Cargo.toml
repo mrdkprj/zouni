@@ -17,6 +17,10 @@ targets = [
 name = "nonstd"
 path = "src/lib.rs"
 
+[features]
+default = []
+"webview2" = ["dep:webview2-com", "dep:serde_json"]
+
 [dependencies]
 serde = {version = "1.0.145", features = ["derive"]}
 mime_guess = "=2.0.5"
@@ -29,7 +33,7 @@ rfd = { version = "0.15", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.60.0", features = [
+windows = { version = "0.61.0", features = [
   "Foundation",
   "Win32_Storage_FileSystem",
   "Win32_Security",
@@ -55,7 +59,9 @@ windows = { version = "0.60.0", features = [
   "Win32_System_Variant",
   "Win32_Devices_DeviceAndDriverInstallation",
 ]}
-windows-core = "0.60.0"
+windows-core = "0.61.0"
+webview2-com = { version = "0.37", optional = true }
+serde_json = { version = "1.0.140", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
