@@ -9,7 +9,7 @@ use webview2_com::{
 };
 use windows::core::{Interface, PCWSTR, PWSTR};
 
-pub fn reg_drop(webview: &ICoreWebView2, target_id: Option<String>) {
+pub fn register_file_drop(webview: &ICoreWebView2, target_id: Option<String>) {
     let js = if let Some(target) = &target_id {
         format!(
             r#"
