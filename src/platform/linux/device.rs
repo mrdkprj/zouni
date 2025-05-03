@@ -96,7 +96,9 @@ pub fn listen<F: FnMut(DeviceEvent) + 'static + Send>(callback: F) -> bool {
                 }
 
                 if let Ok(listener) = LISTENER.try_lock() {
-                    listener.context.as_ref().unwrap().handle_events(Some(Duration::from_millis(10))).unwrap();
+                    if let Some(context) = &listener.context {
+                        context.handle_events(Some(Duration::from_millis(10))).unwrap();
+                    }
                 }
             });
 
