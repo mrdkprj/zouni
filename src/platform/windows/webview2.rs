@@ -45,8 +45,8 @@ pub fn register_file_drop(webview: &ICoreWebView2, target_id: Option<String>) {
 }
 
 #[derive(serde::Serialize)]
-struct File {
-    path: String,
+struct DropData {
+    paths: Vec<String>,
 }
 
 fn drop_handler(webview: Option<ICoreWebView2>, args: Option<ICoreWebView2WebMessageReceivedEventArgs>) -> windows::core::Result<()> {
@@ -59,7 +59,7 @@ fn drop_handler(webview: Option<ICoreWebView2>, args: Option<ICoreWebView2WebMes
                 let args2: ICoreWebView2WebMessageReceivedEventArgs2 = args.cast()?;
                 if let Ok(obj) = args2.AdditionalObjects() {
                     let mut count = 0;
-                    let mut files = Vec::new();
+                    let mut paths = Vec::new();
                     obj.Count(&mut count)?;
                     for i in 0..count {
                         let value = obj.GetValueAtIndex(i)?;
@@ -67,17 +67,19 @@ fn drop_handler(webview: Option<ICoreWebView2>, args: Option<ICoreWebView2WebMes
                             let mut path_ptr = PWSTR::null();
                             file.Path(&mut path_ptr)?;
                             let path = path_ptr.to_string().unwrap();
-                            files.push(File {
-                                path,
-                            });
+                            paths.push(path);
                         }
                     }
 
-                    if files.is_empty() {
+                    if paths.is_empty() {
                         return Ok(());
                     }
 
-                    if let Ok(str) = serde_json::to_string(&files) {
+                    let drop_data = DropData {
+                        paths,
+                    };
+
+                    if let Ok(str) = serde_json::to_string(&drop_data) {
                         let json = encode_wide(str);
                         if let Some(webview) = webview {
                             webview.PostWebMessageAsJson(PCWSTR::from_raw(json.as_ptr()))?;
