@@ -13,25 +13,36 @@ pub fn register_file_drop(webview: &ICoreWebView2, target_id: Option<String>) {
     let js = if let Some(target) = &target_id {
         format!(
             r#"
-                const target = document.getElementById("{}");
-                target.addEventListener("drop", (e) => {{
-                    e.preventDefault();
-                    console.log("here")
-                    if (e.dataTransfer && e.dataTransfer.files) {{
-                       window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
-                    }}
-                }});
+                const register = () => {{
+                    const target = document.getElementById("{}");
+                    target.addEventListener("drop", (e) => {{
+                        e.preventDefault();
+                        if (e.dataTransfer && e.dataTransfer.files) {{
+                        window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
+                        }}
+                    }});
+                }};
+
+                window.addEventListener("DOMContentLoaded", () => register);
+
+                register();
             "#,
             target.clone()
         )
     } else {
         r#"
-            document.addEventListener("drop", (e) => {{
-                e.preventDefault();
-                if (e.dataTransfer && e.dataTransfer.files) {{
-                    window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
-                }}
-            }});
+            const register = () => {{
+                document.addEventListener("drop", (e) => {{
+                    e.preventDefault();
+                    if (e.dataTransfer && e.dataTransfer.files) {{
+                        window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
+                    }}
+                }});
+            }};
+
+            window.addEventListener("DOMContentLoaded", () => register);
+
+            register();
         "#
         .to_string()
     };
