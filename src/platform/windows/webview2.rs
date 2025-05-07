@@ -29,7 +29,7 @@ pub fn register_file_drop<F: Fn(FileDropEvent) + 'static + Send>(webview: &ICore
                     const mached = e.composed ? e.composedPath().some((p) => p.id == "{}") : e.target.id == "{}";
                     if ( mached ) {{
                         e.preventDefault();
-                        console.log("ma");
+
                         if (e.dataTransfer && e.dataTransfer.files) {{
                             window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
                         }}
@@ -88,7 +88,7 @@ fn drop_handler(webview: Option<ICoreWebView2>, args: Option<ICoreWebView2WebMes
     if let Some(args) = args {
         let mut webmessageasstring = PWSTR::null();
         unsafe { args.TryGetWebMessageAsString(&mut webmessageasstring) }?;
-        println!("drop_handler");
+
         if unsafe { webmessageasstring.to_string().unwrap() } == "getPathForFiles" {
             let args2: ICoreWebView2WebMessageReceivedEventArgs2 = args.cast()?;
             if let Ok(obj) = unsafe { args2.AdditionalObjects() } {
