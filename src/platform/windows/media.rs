@@ -34,7 +34,7 @@ fn to_ffmpeg_(props: HashMap<String, String>) -> Metadata {
             "AudioEncodingBitrate" => metadata.streams[1].insert("bit_rate".to_string(), value),
             "AudioFormat" => metadata.streams[1].insert("codec_name".to_string(), get_audio_format(&value).to_string()),
             "AudioSampleRate" => metadata.streams[1].insert("sample_rate".to_string(), value),
-            "MediaDuration" => metadata.format.insert("duration".to_string(), value),
+            "MediaDuration" => metadata.format.insert("duration".to_string(), duration(&value)),
             "Size" => metadata.format.insert("size".to_string(), value),
             // "VideoCompression" => metadata.streams[0].insert("codec_name".to_string(), get_video_format(&value).to_string()),
             "VideoEncodingBitrate" => metadata.streams[0].insert("bit_rate".to_string(), value),
@@ -49,6 +49,12 @@ fn to_ffmpeg_(props: HashMap<String, String>) -> Metadata {
     }
 
     metadata
+}
+
+fn duration(duration_str: &str) -> String {
+    let duration: f64 = duration_str.parse().unwrap();
+    let duration_sec = duration / 10000000.0;
+    duration_sec.to_string()
 }
 
 fn fourcc_to_string(fourcc: u32) -> String {
