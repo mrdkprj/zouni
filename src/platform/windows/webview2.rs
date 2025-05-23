@@ -29,7 +29,6 @@ pub fn register_file_drop<F: Fn(FileDropEvent) + 'static + Send>(webview: &ICore
                     const mached = e.composed ? e.composedPath().some((p) => p.id == "{}") : e.target.id == "{}";
                     if ( mached ) {{
                         e.preventDefault();
-
                         if (e.dataTransfer && e.dataTransfer.files) {{
                             window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
                         }}
