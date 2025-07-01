@@ -17,10 +17,12 @@ use gtk::{
     traits::{BoxExt, CssProviderExt, DialogExt, GtkWindowExt, HeaderBarExt, LabelExt, OrientableExt, ProgressBarExt, StyleContextExt, WidgetExt},
     Align, CssProvider, Dialog, DialogFlags, Label, Orientation, ProgressBar, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION,
 };
+use libc::{timespec, utimensat, AT_FDCWD};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    ffi::CString,
     path::Path,
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -160,16 +162,16 @@ fn to_file_attribute(info: &FileInfo) -> FileAttribute {
         is_device: info.file_type() == FileType::Mountable,
         is_file: info.file_type() == FileType::Regular,
         is_symbolic_link: info.file_type() == FileType::SymbolicLink,
-        ctime_ms: to_msecs(info.attribute_uint64("time::changed"), info.attribute_uint32("time::changed-usec")) as _,
-        mtime_ms: to_msecs(info.attribute_uint64("time::modified"), info.attribute_uint32("time::modified-usec")) as _,
-        atime_ms: to_msecs(info.attribute_uint64("time::access"), info.attribute_uint32("time::access-usec")) as _,
-        birthtime_ms: to_msecs(info.attribute_uint64("time::created"), info.attribute_uint32("time::created-usec")) as _,
+        ctime_ms: to_msecs(info.attribute_uint64("time::changed"), info.attribute_uint32("time::changed-usec")),
+        mtime_ms: to_msecs(info.attribute_uint64("time::modified"), info.attribute_uint32("time::modified-usec")),
+        atime_ms: to_msecs(info.attribute_uint64("time::access"), info.attribute_uint32("time::access-usec")),
+        birthtime_ms: to_msecs(info.attribute_uint64("time::created"), info.attribute_uint32("time::created-usec")),
         size: info.size() as u64,
     }
 }
 
-fn to_msecs(secs: u64, microsecs: u32) -> f64 {
-    (secs as f64) * 1000.0 + (microsecs as f64) / 1000.0
+fn to_msecs(secs: u64, microsecs: u32) -> u64 {
+    secs * 1000 + (microsecs as u64) / 1000
 }
 
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
@@ -640,3 +642,34 @@ fn try_cancel(dialog: &Dialog) {
         cancellable.cancel();
     }
 }
+
+pub fn utimes<P: AsRef<Path>>(file: P, atime_ms: u64, mtime_ms: u64) -> Result<(), String> {
+    let path = CString::new(file.as_ref().to_string_lossy().to_string()).map_err(|e| e.to_string())?;
+    let timespecs = [to_timespec(atime_ms), to_timespec(mtime_ms)];
+    let result = unsafe { utimensat(AT_FDCWD, path.as_ptr(), timespecs.as_ptr(), 0) };
+    if result < 0 {
+        Err("utimensat failed".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn to_timespec(msec: u64) -> timespec {
+    let mut timespec = timespec {
+        tv_sec: (msec / 1000) as _,
+        tv_nsec: ((msec % 1000) * 1000000) as i64,
+    };
+
+    if timespec.tv_nsec < 0 {
+        timespec.tv_nsec += 1e9 as i64;
+        timespec.tv_sec -= 1;
+    }
+
+    timespec
+}
+/*
+ struct timespec ts[2];
+ ts[0] = uv__fs_to_timespec(req->atime);
+ ts[1] = uv__fs_to_timespec(req->mtime);
+ return utimensat(AT_FDCWD, req->path, ts, 0);
+*/

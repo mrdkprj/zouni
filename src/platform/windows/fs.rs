@@ -7,11 +7,12 @@ use std::{collections::HashMap, path::Path};
 use windows::{
     core::{PCSTR, PCWSTR},
     Win32::{
-        Foundation::{HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
+        Foundation::{CloseHandle, FILETIME, HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
         Storage::FileSystem::{
-            FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW,
-            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT,
-            FILE_ATTRIBUTE_SYSTEM, FIND_FIRST_EX_FLAGS, WIN32_FIND_DATAW,
+            CreateFileW, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW,
+            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, SetFileTime, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+            FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
         },
         System::{
             Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
@@ -130,22 +131,12 @@ fn get_attribute(data: &WIN32_FIND_DATAW) -> FileAttribute {
         is_device: file_type == FileType::Device,
         is_file: file_type == FileType::File,
         is_symbolic_link: file_type == FileType::Link,
-        ctime_ms: 0.0,
+        ctime_ms: 0,
         mtime_ms: to_msecs_from_file_time(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
         atime_ms: to_msecs_from_file_time(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
         birthtime_ms: to_msecs_from_file_time(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
         size: (data.nFileSizeLow as u64) | ((data.nFileSizeHigh as u64) << 32),
     }
-}
-
-fn to_msecs_from_file_time(low: u32, high: u32) -> f64 {
-    // FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in milliseconds
-    let windows_epoch = 11644473600000.0;
-    let ticks = ((high as u64) << 32) | low as u64;
-    // FILETIME is in 100-nanosecond intervals
-    let milliseconds = ticks as f64 / 10_000.0;
-
-    milliseconds - windows_epoch
 }
 
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
@@ -477,4 +468,50 @@ pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn utimes<P: AsRef<Path>>(file: P, atime_ms: u64, mtime_ms: u64) -> Result<(), String> {
+    let wide = encode_wide(file.as_ref());
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR::from_raw(wide.as_ptr()),
+            FILE_WRITE_ATTRIBUTES.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+        .map_err(|e| e.message())?
+    };
+
+    if handle.is_invalid() {
+        return Err(format!("Failed to write file:{}", file.as_ref().to_string_lossy().to_string()));
+    }
+
+    unsafe { SetFileTime(handle, None, Some(&to_file_time(atime_ms)), Some(&to_file_time(mtime_ms))).map_err(|e| e.message()) }?;
+
+    unsafe { CloseHandle(handle).map_err(|e| e.message()) }?;
+
+    Ok(())
+}
+
+fn to_file_time(time: u64) -> FILETIME {
+    // milliseconds to 100-nanosecond
+    const EPOCH_DIFFERENCE: u64 = 11644473600000;
+    let intervals = (time + EPOCH_DIFFERENCE) * 10_000;
+    FILETIME {
+        dwLowDateTime: intervals as u32,
+        dwHighDateTime: (intervals >> 32) as u32,
+    }
+}
+
+fn to_msecs_from_file_time(low: u32, high: u32) -> u64 {
+    // FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in milliseconds
+    let windows_epoch = 11644473600000;
+    let ticks = ((high as u64) << 32) | low as u64;
+    // FILETIME is in 100-nanosecond intervals
+    let milliseconds = ticks / 10_000;
+
+    milliseconds - windows_epoch
 }
