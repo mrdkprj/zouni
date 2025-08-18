@@ -230,7 +230,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
 }
 
 pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let from_wide = encode_wide(from.as_ref());
     let to_wide = encode_wide(to.as_ref());
@@ -244,7 +244,7 @@ pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), Stri
 }
 
 pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let from_item_array = get_id_lists(from)?;
     let to_wide = encode_wide(to.as_ref());
@@ -257,7 +257,7 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
 }
 
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let from_wide = encode_wide(from.as_ref());
     let to_wide = encode_wide(to.as_ref());
@@ -275,7 +275,7 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
 }
 
 pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let from_item_array = get_id_lists(from)?;
     let to_wide = encode_wide(to.as_ref());
@@ -293,7 +293,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
 }
 
 pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let file_wide = encode_wide(file_path.as_ref());
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
@@ -305,7 +305,7 @@ pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 }
 
 pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let item_array = get_id_lists(file_paths)?;
 
@@ -316,7 +316,7 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 }
 
 pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _x = ComGuard::new();
 
     let file_wide = encode_wide(file_path.as_ref());
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;
@@ -328,7 +328,7 @@ pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 }
 
 pub fn trash_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let item_array = get_id_lists(file_paths)?;
     let op: IFileOperation = unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL).map_err(|e| e.message()) }?;
@@ -382,7 +382,7 @@ struct ItemData {
 }
 
 pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let recycle_bin_item: *mut ITEMIDLIST = unsafe { SHGetKnownFolderIDList(&FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT.0 as _, None).map_err(|e| e.message()) }?;
     let desktop: IShellFolder = unsafe { SHGetDesktopFolder().map_err(|e| e.message()) }?;
@@ -486,7 +486,7 @@ pub fn utimes<P: AsRef<Path>>(file: P, atime_ms: u64, mtime_ms: u64) -> Result<(
     };
 
     if handle.is_invalid() {
-        return Err(format!("Failed to write file:{}", file.as_ref().to_string_lossy().to_string()));
+        return Err(format!("Failed to write file:{}", file.as_ref().to_string_lossy()));
     }
 
     unsafe { SetFileTime(handle, None, Some(&to_file_time(atime_ms)), Some(&to_file_time(mtime_ms))).map_err(|e| e.message()) }?;

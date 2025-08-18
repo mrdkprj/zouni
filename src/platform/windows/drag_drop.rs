@@ -1,5 +1,5 @@
-use super::util::{encode_wide, ComGuard};
-use crate::{platform::windows::util::GlobalMemory, Operation};
+use super::util::{encode_wide, ComGuard, GlobalMemory};
+use crate::Operation;
 use std::mem::ManuallyDrop;
 use windows::{
     core::{implement, Ref, BOOL, HRESULT, PCWSTR},
@@ -18,7 +18,7 @@ use windows::{
 };
 
 pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let pidls: Vec<*const ITEMIDLIST> = file_paths
         .iter()

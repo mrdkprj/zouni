@@ -31,7 +31,7 @@ use windows::{
 const SW_SHOWNORMAL: i32 = 1;
 
 pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let wide_verb = encode_wide("open");
     let wide_path = encode_wide(file_path.as_ref());
@@ -48,7 +48,7 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 }
 
 pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let app_path = encode_wide(app_path.as_ref());
     let file_path = encode_wide(file_path.as_ref());
@@ -65,7 +65,7 @@ pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path:
 }
 
 pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let app_path = encode_wide(app_path.as_ref());
     let file_path = encode_wide(file_path.as_ref());
@@ -81,7 +81,7 @@ pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) ->
 }
 
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let wide_verb = encode_wide("openas");
     let wide_path = encode_wide(file_path.as_ref());
@@ -100,7 +100,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
     let mut apps = Vec::new();
 
     if let Some(extension_name) = file_path.as_ref().extension() {
-        let _ = ComGuard::new();
+        let _guard = ComGuard::new();
         let mut extension = String::from(".");
         extension.push_str(extension_name.to_str().unwrap());
         let file_extension = encode_wide(extension);
@@ -291,7 +291,7 @@ fn extract_icon(icon_path: &str, icon_index: i32) -> Option<HICON> {
 }
 
 pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let wide_verb = encode_wide("properties");
     let wide_path = encode_wide(file_path.as_ref());
@@ -307,7 +307,7 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 }
 
 pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let wide_path = encode_wide(file_path.as_ref());
     let mut idlist = std::ptr::null_mut();
@@ -330,7 +330,7 @@ static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     let hwnd = HWND(window_handle as _);
 
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let mut thumb_buttons: Vec<THUMBBUTTON> = Vec::new();
     let mut id_map = HashMap::new();
@@ -500,7 +500,7 @@ fn HIWORD(dword: u32) -> u16 {
 }
 
 pub fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let mut result = HashMap::new();
     let wide = encode_wide(file_path.as_ref());

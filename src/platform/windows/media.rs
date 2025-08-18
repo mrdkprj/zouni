@@ -17,7 +17,7 @@ pub struct Metadata {
 pub fn get_media_metadata<P1: AsRef<Path>>(file_path: P1) -> Result<Metadata> {
     let mut metadata = Metadata::default();
 
-    let _ = ComGuard::new();
+    let _guard = ComGuard::new();
 
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }?;
 
