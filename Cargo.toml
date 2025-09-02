@@ -2,10 +2,12 @@
 name = "zouni"
 version = "0.1.0"
 edition = "2021"
+description = "Variety of functions that `std` does not offer or `std` offers but are not satisfiable"
 readme = "README.md"
 categories = ["util"]
 license = "MIT"
 repository = "https://github.com/mrdkprj/zouni"
+documentation = "https://docs.rs/zouni/"
 
 [package.metadata.docs.rs]
 targets = [
