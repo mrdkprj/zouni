@@ -30,6 +30,7 @@ use windows::{
 
 const SW_SHOWNORMAL: i32 = 1;
 
+/// Opens the file with the default/associated application
 pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -47,6 +48,7 @@ pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
+/// Opens the file with the specified application
 pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -80,6 +82,7 @@ pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) ->
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
+/// Shows the application chooser dialog
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -96,6 +99,7 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
+/// Lists the applications that can open the file
 pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
     let mut apps = Vec::new();
 
@@ -290,6 +294,7 @@ fn extract_icon(icon_path: &str, icon_index: i32) -> Option<HICON> {
     None
 }
 
+/// Shows the file/directory property dialog
 pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -327,6 +332,7 @@ struct InnerThumbButtons {
 
 static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
 
+/// Adds a thumbnail toolbar with specified buttons to a taskbar layout of an application window
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     let hwnd = HWND(window_handle as _);
 
@@ -499,7 +505,7 @@ fn HIWORD(dword: u32) -> u16 {
     ((dword & 0xFFFF_0000) >> 16) as u16
 }
 
-pub fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
+pub(crate) fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, String> {
     let _guard = ComGuard::new();
 
     let mut result = HashMap::new();

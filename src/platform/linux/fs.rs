@@ -38,6 +38,7 @@ const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,st
 const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
 const IO_CANCEL: &str = "IO_CANCEL";
 
+/// Lists volumes
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes = Vec::new();
     let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,TYPE,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().map_err(|e| e.to_string())?;
@@ -100,48 +101,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
-    if !directory.as_ref().is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let file = File::for_parse_name(directory.as_ref().to_str().unwrap());
-
-    let mut entries = Vec::new();
-    try_readdir(file, &mut entries, recursive, with_mime_type)?;
-
-    Ok(entries)
-}
-
-fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
-    for info in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
-        let name = info.name();
-        let mut full_path = dir.path().unwrap().to_path_buf();
-        full_path.push(name.clone());
-
-        let mime_type = if with_mime_type {
-            get_mime_type(&full_path)
-        } else {
-            String::new()
-        };
-
-        entries.push(Dirent {
-            name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
-            parent_path: dir.path().unwrap().to_string_lossy().to_string(),
-            full_path: full_path.to_string_lossy().to_string(),
-            attributes: to_file_attribute(&info),
-            mime_type,
-        });
-
-        if info.file_type() == FileType::Directory && recursive {
-            let next_dir = File::for_path(full_path);
-            try_readdir(next_dir, entries, recursive, with_mime_type)?;
-        }
-    }
-
-    Ok(entries)
-}
-
+/// Gets file/directory attributes
 pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
     let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
@@ -174,6 +134,7 @@ fn to_msecs(secs: u64, microsecs: u32) -> u64 {
     secs * 1000 + (microsecs as u64) / 1000
 }
 
+/// Gets mime type of the file
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
     match mime_guess::from_path(file_path).first() {
         Some(s) => s.essence_str().to_string(),
@@ -191,6 +152,49 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String
     Ok(ctype.to_string())
 }
 
+pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
+    if !directory.as_ref().is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let file = File::for_parse_name(directory.as_ref().to_str().unwrap());
+
+    let mut entries = Vec::new();
+    try_readdir(file, &mut entries, recursive, with_mime_type)?;
+
+    Ok(entries)
+}
+
+/// Lists all files/directories under the specified directory
+fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
+    for info in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
+        let name = info.name();
+        let mut full_path = dir.path().unwrap().to_path_buf();
+        full_path.push(name.clone());
+
+        let mime_type = if with_mime_type {
+            get_mime_type(&full_path)
+        } else {
+            String::new()
+        };
+
+        entries.push(Dirent {
+            name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            parent_path: dir.path().unwrap().to_string_lossy().to_string(),
+            full_path: full_path.to_string_lossy().to_string(),
+            attributes: to_file_attribute(&info),
+            mime_type,
+        });
+
+        if info.file_type() == FileType::Directory && recursive {
+            let next_dir = File::for_path(full_path);
+            try_readdir(next_dir, entries, recursive, with_mime_type)?;
+        }
+    }
+
+    Ok(entries)
+}
+
 fn register_cancellable() -> (u32, Cancellable) {
     let mut tokens = CANCELLABLES.lock().unwrap();
     let token = Cancellable::new();
@@ -199,6 +203,7 @@ fn register_cancellable() -> (u32, Cancellable) {
     (id, token)
 }
 
+/// Moves an item
 pub async fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let (sender, receiver) = async_std::channel::bounded(1);
 
@@ -211,18 +216,7 @@ pub async fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<()
     }
 }
 
-pub async fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let (sender, receiver) = async_std::channel::bounded(1);
-
-    execute_copy(from, to, &Cancellable::new(), sender.clone());
-
-    if let Ok(result) = receiver.recv().await {
-        result
-    } else {
-        Ok(())
-    }
-}
-
+/// Moves multiple items
 pub async fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
     let (cancel_id, cancellable) = register_cancellable();
 
@@ -251,6 +245,20 @@ pub async fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> R
     clean_up(Ok(()), &dialog, cancel_id)
 }
 
+/// Copies an item
+pub async fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
+    let (sender, receiver) = async_std::channel::bounded(1);
+
+    execute_copy(from, to, &Cancellable::new(), sender.clone());
+
+    if let Ok(result) = receiver.recv().await {
+        result
+    } else {
+        Ok(())
+    }
+}
+
+/// Copies multiple items
 pub async fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
     let (cancel_id, cancellable) = register_cancellable();
 
@@ -416,6 +424,7 @@ fn clean_up(result: Result<(), String>, dialog: &gtk::Dialog, cancel_id: u32) ->
     }
 }
 
+/// Deletes an item
 pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     if file_path.as_ref().is_dir() {
         let files = readdir(&file_path, false, false)?;
@@ -430,6 +439,7 @@ pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     Ok(())
 }
 
+/// Deletes multiple items
 pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     for file_path in file_paths {
         delete(file_path)?;
@@ -438,11 +448,13 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     Ok(())
 }
 
+/// Moves an item to the OS-specific trash location
 pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
     let file = File::for_parse_name(file.as_ref().to_str().unwrap());
     file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
 }
 
+/// Moves multiple items to the OS-specific trash location
 pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
     for file in files {
         trash(file)?;
@@ -468,6 +480,7 @@ struct TrashData {
 
 const TRASH_PATH_STR: &str = "trash:///";
 
+/// Undos a trash operation
 pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
     let trash_file = File::for_uri(TRASH_PATH_STR);
 
@@ -643,6 +656,7 @@ fn try_cancel(dialog: &Dialog) {
     }
 }
 
+/// Changes the modification and access timestamps of a file
 pub fn utimes<P: AsRef<Path>>(file: P, atime_ms: u64, mtime_ms: u64) -> Result<(), String> {
     let path = CString::new(file.as_ref().to_string_lossy().to_string()).map_err(|e| e.to_string())?;
     let timespecs = [to_timespec(atime_ms), to_timespec(mtime_ms)];
@@ -667,9 +681,3 @@ fn to_timespec(msec: u64) -> timespec {
 
     timespec
 }
-/*
- struct timespec ts[2];
- ts[0] = uv__fs_to_timespec(req->atime);
- ts[1] = uv__fs_to_timespec(req->mtime);
- return utimensat(AT_FDCWD, req->path, ts, 0);
-*/

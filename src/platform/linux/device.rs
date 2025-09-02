@@ -67,6 +67,7 @@ struct Listener {
     registration: Option<Registration<Context>>,
 }
 
+/// Get notification when any device is conneced
 pub fn listen<F: FnMut(DeviceEvent) + 'static + Send>(callback: F) -> bool {
     if !rusb::has_hotplug() {
         return false;

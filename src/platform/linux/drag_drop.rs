@@ -1,6 +1,7 @@
 use crate::{platform::linux::util::init, Operation};
 use gtk::{prelude::WidgetExt, TargetEntry};
 
+/// Starts dragging
 pub fn start_drag(file_paths: Vec<String>, _operation: Operation) -> Result<(), String> {
     init();
 

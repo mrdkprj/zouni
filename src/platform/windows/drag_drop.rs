@@ -17,6 +17,7 @@ use windows::{
     },
 };
 
+/// Starts dragging
 pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -135,12 +136,14 @@ impl IDropSource_Impl for DragDropTarget_Impl {
     }
 }
 
+/// Registers the window as a drop target
 pub fn register(window_handle: isize) -> Result<(), String> {
     let _ = unregister(window_handle);
     let drag_drop_target: IDropTarget = DropTarget.into();
     unsafe { RegisterDragDrop(HWND(window_handle as _), &drag_drop_target).map_err(|e| e.message()) }
 }
 
+/// Revokes a drop target
 pub fn unregister(window_handle: isize) -> Result<(), String> {
     unsafe { RevokeDragDrop(HWND(window_handle as _)).map_err(|e| e.message()) }
 }

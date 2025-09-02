@@ -1,8 +1,8 @@
+use super::util::init;
 use crate::{ClipboardData, Operation};
 use gtk::{gdk::SELECTION_PRIMARY, TargetEntry, TargetFlags};
 
-use super::util::init;
-
+/// Checks if text is available
 pub fn is_text_available() -> bool {
     init();
 
@@ -10,6 +10,9 @@ pub fn is_text_available() -> bool {
     clipboard.wait_is_text_available()
 }
 
+/// Reads text from clipboard
+///
+/// `window_handle` is ignored
 pub fn read_text(_window_handle: isize) -> Result<String, String> {
     init();
 
@@ -21,6 +24,9 @@ pub fn read_text(_window_handle: isize) -> Result<String, String> {
     Ok(clipboard.wait_for_text().unwrap_or_default().to_string())
 }
 
+/// Writes text to clipboard
+///
+/// `window_handle` is ignored
 pub fn write_text(_window_handle: isize, text: String) -> Result<(), String> {
     init();
 
@@ -30,6 +36,7 @@ pub fn write_text(_window_handle: isize, text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Checks if URIs are available
 pub fn is_uris_available() -> bool {
     init();
 
@@ -37,6 +44,9 @@ pub fn is_uris_available() -> bool {
     clipboard.wait_is_uris_available()
 }
 
+/// Reads URIs from clipboard
+///
+/// `window_handle` is ignored
 pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
     init();
     let data = ClipboardData {
@@ -58,6 +68,9 @@ pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
     })
 }
 
+/// Writes URIs to clipboard
+///
+/// `window_handle` is ignored
 pub fn write_uris(_window_handle: isize, paths: &[String], _operation: Operation) -> Result<(), String> {
     init();
 

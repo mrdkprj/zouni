@@ -27,6 +27,7 @@ use windows::{
     },
 };
 
+/// Lists volumes
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes: Vec<Volume> = Vec::new();
 
@@ -85,6 +86,7 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
+/// Gets file/directory attributes
 pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let wide = encode_wide(prefixed(file_path.as_ref()));
     let path = PCWSTR::from_raw(wide.as_ptr());
@@ -139,6 +141,7 @@ fn get_attribute(data: &WIN32_FIND_DATAW) -> FileAttribute {
     }
 }
 
+/// Gets mime type of the file
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
     match mime_guess::from_path(file_path).first() {
         Some(s) => s.essence_str().to_string(),
@@ -156,6 +159,7 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> String {
     }
 }
 
+/// Lists all files/directories under the specified directory
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
     let mut entries = Vec::new();
 
@@ -229,6 +233,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
     Ok(entries)
 }
 
+/// Moves an item
 pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -243,6 +248,7 @@ pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), Stri
     execute(op)
 }
 
+/// Moves multiple items
 pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -256,6 +262,7 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
     execute(op)
 }
 
+/// Copies an item
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -274,6 +281,7 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
     execute(op)
 }
 
+/// Copies multiple items
 pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -292,6 +300,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
     execute(op)
 }
 
+/// Deletes an item
 pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -304,6 +313,7 @@ pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     execute(op)
 }
 
+/// Deletes multiple items
 pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -315,6 +325,7 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     execute(op)
 }
 
+/// Moves an item to the OS-specific trash location
 pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _x = ComGuard::new();
 
@@ -327,6 +338,7 @@ pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     execute(op)
 }
 
+/// Moves multiple items to the OS-specific trash location
 pub fn trash_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -337,7 +349,7 @@ pub fn trash_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     execute(op)
 }
 
-pub fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
+fn get_id_lists<P: AsRef<Path>>(from: &[P]) -> Result<IShellItemArray, String> {
     let items: Vec<*const ITEMIDLIST> = from
         .iter()
         .map(|path| {
@@ -381,6 +393,7 @@ struct ItemData {
     item: *mut ITEMIDLIST,
 }
 
+/// Undos a trash operation
 pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
     let _guard = ComGuard::new();
 
@@ -470,6 +483,7 @@ pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+/// Changes the modification and access timestamps of a file
 pub fn utimes<P: AsRef<Path>>(file: P, atime_ms: u64, mtime_ms: u64) -> Result<(), String> {
     let wide = encode_wide(file.as_ref());
     let handle = unsafe {

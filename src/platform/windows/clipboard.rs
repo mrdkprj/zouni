@@ -10,6 +10,7 @@ use windows::Win32::{
     UI::Shell::{DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, DROPFILES, HDROP},
 };
 
+/// Checks if text is available
 pub fn is_text_available() -> bool {
     is_ansi_text_available() || is_unicode_text_available()
 }
@@ -22,6 +23,7 @@ fn is_unicode_text_available() -> bool {
     unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok() }
 }
 
+/// Reads text from clipboard
 pub fn read_text(window_handle: isize) -> Result<String, String> {
     if !is_text_available() {
         return Ok(String::new());
@@ -68,6 +70,7 @@ pub fn read_text(window_handle: isize) -> Result<String, String> {
     Ok(text)
 }
 
+/// Writes text to clipboard
 pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
     unsafe { OpenClipboard(Some(HWND(window_handle as _))).map_err(|e| e.message()) }?;
 
@@ -95,10 +98,12 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Checks if URIs are available
 pub fn is_uris_available() -> bool {
     unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() }
 }
 
+/// Reads URIs from clipboard
 pub fn read_uris(window_handle: isize) -> Result<ClipboardData, String> {
     let mut data = ClipboardData {
         operation: Operation::None,
@@ -140,6 +145,7 @@ pub fn read_uris(window_handle: isize) -> Result<ClipboardData, String> {
     Ok(data)
 }
 
+/// Writes URIs to clipboard
 pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) -> Result<(), String> {
     let mut file_list = paths.join("\0");
     // Append null to the last file

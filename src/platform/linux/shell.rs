@@ -20,7 +20,70 @@ use gtk::{
 };
 use std::path::Path;
 
-#[allow(unused_variables)]
+/// Opens the file with the default/associated application
+pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
+    let uri = format!("file://{}", file_path.as_ref().to_str().unwrap());
+    gtk::gio::AppInfo::launch_default_for_uri(&uri, AppLaunchContext::NONE).map_err(|e| e.message().to_string())
+}
+
+/// Opens the file with the specified application
+pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    let info = gtk::gio::AppInfo::create_from_commandline(app_path.as_ref(), None, AppInfoCreateFlags::NONE).map_err(|e| e.message().to_string())?;
+    info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
+}
+
+pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    let info = gtk::gio::AppInfo::create_from_commandline(app_path.as_ref(), None, AppInfoCreateFlags::NEEDS_TERMINAL).map_err(|e| e.message().to_string())?;
+    info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
+}
+
+/// Shows the application chooser dialog
+pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
+    init();
+    let file = File::for_path(file_path.as_ref().to_str().unwrap());
+    let dialog = AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
+    dialog.show_all();
+    Ok(())
+}
+
+fn resolve_themed_icon(icon_name: &str) -> String {
+    init();
+    let theme = IconTheme::default().unwrap();
+    if let Some(path) = theme.lookup_icon(icon_name, IconSize::Dialog.into(), IconLookupFlags::empty()) {
+        return path.filename().unwrap_or_default().to_string_lossy().to_string();
+    }
+    String::new()
+}
+
+/// Lists the applications that can open the file
+pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
+    let mut apps = Vec::new();
+    let content_type = get_mime_type(file_path);
+
+    for app_info in gtk::gio::AppInfo::all_for_type(&content_type) {
+        let name = app_info.display_name().to_string();
+        let path = app_info.commandline().unwrap_or_default().to_string_lossy().to_string();
+        let icon = if let Some(icon) = app_info.icon() {
+            if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
+                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str())
+            } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
+                file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        apps.push(AppInfo {
+            path,
+            name,
+            icon,
+        });
+    }
+    apps
+}
+
+/// Shows the file/directory property dialog
 pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let info = fs::stat_inner(file_path.as_ref())?;
     let message = vec![
@@ -50,65 +113,6 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     Ok(())
 }
 
-pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let uri = format!("file://{}", file_path.as_ref().to_str().unwrap());
-    gtk::gio::AppInfo::launch_default_for_uri(&uri, AppLaunchContext::NONE).map_err(|e| e.message().to_string())
-}
-
-pub fn open_path_with<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
-    let info = gtk::gio::AppInfo::create_from_commandline(app_path.as_ref(), None, AppInfoCreateFlags::NONE).map_err(|e| e.message().to_string())?;
-    info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
-}
-
-pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
-    let info = gtk::gio::AppInfo::create_from_commandline(app_path.as_ref(), None, AppInfoCreateFlags::NEEDS_TERMINAL).map_err(|e| e.message().to_string())?;
-    info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
-}
-
-pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    init();
-    let file = File::for_path(file_path.as_ref().to_str().unwrap());
-    let dialog = AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
-    dialog.show_all();
-    Ok(())
-}
-
-fn resolve_themed_icon(icon_name: &str) -> String {
-    init();
-    let theme = IconTheme::default().unwrap();
-    if let Some(path) = theme.lookup_icon(icon_name, IconSize::Dialog.into(), IconLookupFlags::empty()) {
-        return path.filename().unwrap_or_default().to_string_lossy().to_string();
-    }
-    String::new()
-}
-
-pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
-    let mut apps = Vec::new();
-    let content_type = get_mime_type(file_path);
-
-    for app_info in gtk::gio::AppInfo::all_for_type(&content_type) {
-        let name = app_info.display_name().to_string();
-        let path = app_info.commandline().unwrap_or_default().to_string_lossy().to_string();
-        let icon = if let Some(icon) = app_info.icon() {
-            if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
-                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str())
-            } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
-                file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-        apps.push(AppInfo {
-            path,
-            name,
-            icon,
-        });
-    }
-    apps
-}
-
 pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let bus = gtk::gio::bus_get_sync(gtk::gio::BusType::Session, Cancellable::NONE).unwrap();
     let conn = gtk::gio::DBusConnection::new_sync(&bus.stream(), None, DBusConnectionFlags::NONE, None, Cancellable::NONE).unwrap();
@@ -131,6 +135,7 @@ pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
 }
 
 #[allow(unused_variables)]
+/// Does nothing on Linux
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {
     Ok(())
 }

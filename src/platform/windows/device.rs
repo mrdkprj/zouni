@@ -22,6 +22,7 @@ pub struct DeviceEvent {
     event: String,
 }
 
+/// Get notification when any device is conneced
 pub fn listen<F: FnMut(DeviceEvent) + 'static>(callback: F) -> bool {
     let notify_type = CM_NOTIFY_FILTER {
         cbSize: size_of::<CM_NOTIFY_FILTER>() as _,

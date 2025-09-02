@@ -64,6 +64,7 @@ pub struct AppInfo {
     pub rgba_icon: RgbaIcon,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RgbaIcon {
     pub rgba: Vec<u8>,
