@@ -205,7 +205,7 @@ fn get_icon_path(icon_location: PWSTR) -> String {
 fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String> {
     let icon_path = decode_wide(unsafe { icon_path.as_wide() });
 
-    if let Some(hicon) = extract_icon(&icon_path, icon_index) {
+    if let Some(hicon) = extract_hicon(&icon_path, icon_index) {
         let mut icon_info = ICONINFO::default();
         unsafe { GetIconInfo(hicon, &mut icon_info).map_err(|e| e.message()) }?;
 
@@ -278,7 +278,7 @@ fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String>
     Err("Not found".to_string())
 }
 
-fn extract_icon(icon_path: &str, icon_index: i32) -> Option<HICON> {
+fn extract_hicon(icon_path: &str, icon_index: i32) -> Option<HICON> {
     if icon_path.is_empty() {
         return None;
     }
@@ -292,6 +292,12 @@ fn extract_icon(icon_path: &str, icon_index: i32) -> Option<HICON> {
     }
 
     None
+}
+
+/// Extract icon from executable or icon.
+pub fn extract_icon<P: AsRef<Path>>(path: P) -> Result<RgbaIcon, String> {
+    let mut icon_path_w = encode_wide(path.as_ref());
+    to_rgba_bitmap(PWSTR::from_raw(icon_path_w.as_mut_ptr()), 0)
 }
 
 /// Shows the file/directory property dialog
