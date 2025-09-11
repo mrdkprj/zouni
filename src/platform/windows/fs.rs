@@ -101,11 +101,11 @@ pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
 
 fn get_attribute<P: AsRef<Path>>(file_path: P, data: &WIN32_FIND_DATAW) -> Result<FileAttribute, String> {
     let attributes = data.dwFileAttributes;
-    let file_type = get_file_type(attributes);
-    let link_path = if file_type == FileType::Link {
+    let possible_file_type = get_file_type(attributes);
+    let (file_type, is_symbolic_link, link_path) = if possible_file_type == FileType::Link {
         get_link_path(file_path.as_ref())?
     } else {
-        String::new()
+        (possible_file_type, false, String::new())
     };
 
     Ok(FileAttribute {
@@ -115,7 +115,7 @@ fn get_attribute<P: AsRef<Path>>(file_path: P, data: &WIN32_FIND_DATAW) -> Resul
         is_system: attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0,
         is_device: file_type == FileType::Device,
         is_file: file_type == FileType::File,
-        is_symbolic_link: file_type == FileType::Link,
+        is_symbolic_link,
         ctime_ms: 0,
         mtime_ms: to_msecs_from_file_time(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
         atime_ms: to_msecs_from_file_time(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
@@ -150,7 +150,7 @@ fn get_file_type(attr: u32) -> FileType {
     FileType::File
 }
 
-fn get_link_path<P: AsRef<Path>>(full_path: P) -> Result<String, String> {
+fn get_link_path<P: AsRef<Path>>(full_path: P) -> Result<(FileType, bool, String), String> {
     let _guard = ComGuard::new();
 
     let shell_link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
@@ -158,14 +158,21 @@ fn get_link_path<P: AsRef<Path>>(full_path: P) -> Result<String, String> {
     let wide = encode_wide(prefixed(full_path.as_ref()));
     let path = PCWSTR::from_raw(wide.as_ptr());
     if unsafe { persist_file.Load(path, STGM_READ).is_err() } {
-        return Ok(String::new());
+        return Ok((FileType::File, false, String::new()));
     }
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let mut link_path = vec![0u16; (MAX_PATH + 1) as usize];
     unsafe { shell_link.GetPath(&mut link_path, &mut data, SLGP_UNCPRIORITY.0 as _).map_err(|e| e.message()) }?;
-
-    Ok(decode_wide(&link_path))
+    let mut working_directory = vec![0u16; (MAX_PATH + 1) as usize];
+    unsafe { shell_link.GetWorkingDirectory(&mut working_directory).map_err(|e| e.message()) }?;
+    let link_path_str = decode_wide(&link_path);
+    let working_directory_str = decode_wide(&working_directory);
+    if working_directory_str.is_empty() {
+        Ok((FileType::Dir, true, link_path_str))
+    } else {
+        Ok((FileType::File, true, link_path_str))
+    }
 }
 
 /// Gets mime type of the file
