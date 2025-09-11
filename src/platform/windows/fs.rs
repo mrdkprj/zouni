@@ -10,9 +10,9 @@ use windows::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
         Storage::FileSystem::{
             CreateFileW, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW,
-            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, SetFileTime, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
-            FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
+            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, SetFileTime, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+            FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
         },
         System::{
             Com::{CoCreateInstance, CoTaskMemFree, IPersistFile, CLSCTX_ALL, CLSCTX_INPROC_SERVER, STGM_READ},
@@ -101,7 +101,7 @@ pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
 
 fn get_attribute<P: AsRef<Path>>(file_path: P, data: &WIN32_FIND_DATAW) -> Result<FileAttribute, String> {
     let attributes = data.dwFileAttributes;
-    let possible_file_type = get_file_type(attributes);
+    let possible_file_type = get_file_type(&file_path, attributes);
     let (file_type, is_symbolic_link, link_path) = if possible_file_type == FileType::Link {
         get_link_path(file_path.as_ref())?
     } else {
@@ -133,7 +133,7 @@ enum FileType {
     File,
 }
 
-fn get_file_type(attr: u32) -> FileType {
+fn get_file_type<P: AsRef<Path>>(file_path: &P, attr: u32) -> FileType {
     if attr & FILE_ATTRIBUTE_DEVICE.0 != 0 {
         return FileType::Device;
     }
@@ -142,8 +142,9 @@ fn get_file_type(attr: u32) -> FileType {
         return FileType::Dir;
     }
 
-    // Shortcut(.lnk) is FILE_ATTRIBUTE_ARCHIVE
-    if attr & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 || attr & FILE_ATTRIBUTE_ARCHIVE.0 != 0 {
+    // Shortcut/file/archive are all FILE_ATTRIBUTE_ARCHIVE
+    // So determine type by extension
+    if attr & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 || file_path.as_ref().extension().unwrap_or_default() == "lnk" {
         return FileType::Link;
     }
 
