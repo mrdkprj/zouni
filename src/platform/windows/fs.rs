@@ -125,7 +125,7 @@ fn get_attribute<P: AsRef<Path>>(file_path: P, data: &WIN32_FIND_DATAW) -> Resul
     })
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum FileType {
     Device,
     Link,
@@ -138,13 +138,13 @@ fn get_file_type(attr: u32) -> FileType {
         return FileType::Device;
     }
 
+    if attr & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+        return FileType::Dir;
+    }
+
     // Shortcut(.lnk) is FILE_ATTRIBUTE_ARCHIVE
     if attr & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 || attr & FILE_ATTRIBUTE_ARCHIVE.0 != 0 {
         return FileType::Link;
-    }
-
-    if attr & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
-        return FileType::Dir;
     }
 
     FileType::File
