@@ -31,6 +31,7 @@ pub struct FileAttribute {
     pub atime_ms: u64,
     pub birthtime_ms: u64,
     pub size: u64,
+    pub link_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

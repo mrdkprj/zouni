@@ -5,24 +5,24 @@ use super::{
 use crate::{Dirent, FileAttribute, Volume};
 use std::{collections::HashMap, path::Path};
 use windows::{
-    core::{PCSTR, PCWSTR},
+    core::{Interface, PCSTR, PCWSTR},
     Win32::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
         Storage::FileSystem::{
             CreateFileW, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW,
-            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, SetFileTime, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
-            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
-            FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
+            GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, SetFileTime, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
+            FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES, FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
         },
         System::{
-            Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
+            Com::{CoCreateInstance, CoTaskMemFree, IPersistFile, CLSCTX_ALL, CLSCTX_INPROC_SERVER, STGM_READ},
             Variant::{VariantChangeType, VariantClear, VARIANT, VAR_CHANGE_FLAGS, VT_DATE},
         },
         UI::Shell::{
             Common::{ITEMIDLIST, STRRET},
-            FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray, SHCreateItemFromParsingName,
-            SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_RENAMEONCOLLISION,
-            KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL,
+            FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray, IShellLinkW, SHCreateItemFromParsingName,
+            SHCreateShellItemArrayFromIDLists, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, ShellLink, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION,
+            FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_NORMAL, SLGP_UNCPRIORITY,
         },
     },
 };
@@ -93,10 +93,36 @@ pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-    let file_attributes = get_attribute(&data);
+    let file_attributes = get_attribute(file_path, &data)?;
     unsafe { FindClose(handle).map_err(|e| e.message()) }?;
 
     Ok(file_attributes)
+}
+
+fn get_attribute<P: AsRef<Path>>(file_path: P, data: &WIN32_FIND_DATAW) -> Result<FileAttribute, String> {
+    let attributes = data.dwFileAttributes;
+    let file_type = get_file_type(attributes);
+    let link_path = if file_type == FileType::Link {
+        get_link_path(file_path.as_ref())?
+    } else {
+        String::new()
+    };
+
+    Ok(FileAttribute {
+        is_directory: file_type == FileType::Dir,
+        is_read_only: attributes & FILE_ATTRIBUTE_READONLY.0 != 0,
+        is_hidden: attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0,
+        is_system: attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0,
+        is_device: file_type == FileType::Device,
+        is_file: file_type == FileType::File,
+        is_symbolic_link: file_type == FileType::Link,
+        ctime_ms: 0,
+        mtime_ms: to_msecs_from_file_time(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
+        atime_ms: to_msecs_from_file_time(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
+        birthtime_ms: to_msecs_from_file_time(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
+        size: (data.nFileSizeLow as u64) | ((data.nFileSizeHigh as u64) << 32),
+        link_path,
+    })
 }
 
 #[derive(PartialEq)]
@@ -111,9 +137,12 @@ fn get_file_type(attr: u32) -> FileType {
     if attr & FILE_ATTRIBUTE_DEVICE.0 != 0 {
         return FileType::Device;
     }
-    if attr & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+
+    // Shortcut(.lnk) is FILE_ATTRIBUTE_ARCHIVE
+    if attr & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 || attr & FILE_ATTRIBUTE_ARCHIVE.0 != 0 {
         return FileType::Link;
     }
+
     if attr & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
         return FileType::Dir;
     }
@@ -121,24 +150,22 @@ fn get_file_type(attr: u32) -> FileType {
     FileType::File
 }
 
-fn get_attribute(data: &WIN32_FIND_DATAW) -> FileAttribute {
-    let attributes = data.dwFileAttributes;
-    let file_type = get_file_type(attributes);
+fn get_link_path<P: AsRef<Path>>(full_path: P) -> Result<String, String> {
+    let _guard = ComGuard::new();
 
-    FileAttribute {
-        is_directory: file_type == FileType::Dir,
-        is_read_only: attributes & FILE_ATTRIBUTE_READONLY.0 != 0,
-        is_hidden: attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0,
-        is_system: attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0,
-        is_device: file_type == FileType::Device,
-        is_file: file_type == FileType::File,
-        is_symbolic_link: file_type == FileType::Link,
-        ctime_ms: 0,
-        mtime_ms: to_msecs_from_file_time(data.ftLastWriteTime.dwLowDateTime, data.ftLastWriteTime.dwHighDateTime),
-        atime_ms: to_msecs_from_file_time(data.ftLastAccessTime.dwLowDateTime, data.ftLastAccessTime.dwHighDateTime),
-        birthtime_ms: to_msecs_from_file_time(data.ftCreationTime.dwLowDateTime, data.ftCreationTime.dwHighDateTime),
-        size: (data.nFileSizeLow as u64) | ((data.nFileSizeHigh as u64) << 32),
+    let shell_link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
+    let persist_file: IPersistFile = shell_link.cast().map_err(|e| e.message())?;
+    let wide = encode_wide(prefixed(full_path.as_ref()));
+    let path = PCWSTR::from_raw(wide.as_ptr());
+    if unsafe { persist_file.Load(path, STGM_READ).is_err() } {
+        return Ok(String::new());
     }
+
+    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+    let mut link_path = vec![0u16; (MAX_PATH + 1) as usize];
+    unsafe { shell_link.GetPath(&mut link_path, &mut data, SLGP_UNCPRIORITY.0 as _).map_err(|e| e.message()) }?;
+
+    Ok(decode_wide(&link_path))
 }
 
 /// Gets mime type of the file
@@ -210,7 +237,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
             name: name.clone(),
             parent_path: parent.as_ref().to_string_lossy().to_string(),
             full_path: full_path.to_string_lossy().to_string(),
-            attributes: get_attribute(&data),
+            attributes: get_attribute(full_path, &data)?,
             mime_type,
         });
 
@@ -327,7 +354,7 @@ pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 
 /// Moves an item to the OS-specific trash location
 pub fn trash<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let _x = ComGuard::new();
+    let _guard = ComGuard::new();
 
     let file_wide = encode_wide(file_path.as_ref());
     let shell_item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR::from_raw(file_wide.as_ptr()), None).map_err(|e| e.message()) }?;

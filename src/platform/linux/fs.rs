@@ -33,7 +33,7 @@ use std::{
 static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system";
+const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
 const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
 const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
 const IO_CANCEL: &str = "IO_CANCEL";
@@ -121,12 +121,17 @@ fn to_file_attribute(info: &FileInfo) -> FileAttribute {
         is_system: info.boolean("dos::is-system"),
         is_device: info.file_type() == FileType::Mountable,
         is_file: info.file_type() == FileType::Regular,
-        is_symbolic_link: info.file_type() == FileType::SymbolicLink,
+        is_symbolic_link: info.is_symlink(),
         ctime_ms: to_msecs(info.attribute_uint64("time::changed"), info.attribute_uint32("time::changed-usec")),
         mtime_ms: to_msecs(info.attribute_uint64("time::modified"), info.attribute_uint32("time::modified-usec")),
         atime_ms: to_msecs(info.attribute_uint64("time::access"), info.attribute_uint32("time::access-usec")),
         birthtime_ms: to_msecs(info.attribute_uint64("time::created"), info.attribute_uint32("time::created-usec")),
         size: info.size() as u64,
+        link_path: if info.is_symlink() {
+            info.symlink_target().unwrap_or_default().to_string_lossy().to_string()
+        } else {
+            String::new()
+        },
     }
 }
 
@@ -152,6 +157,7 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String
     Ok(ctype.to_string())
 }
 
+/// Lists all files/directories under the specified directory
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
     if !directory.as_ref().is_dir() {
         return Ok(Vec::new());
@@ -165,7 +171,6 @@ pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bo
     Ok(entries)
 }
 
-/// Lists all files/directories under the specified directory
 fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
     for info in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
         let name = info.name();
