@@ -86,6 +86,80 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
+/// Lists all files/directories under the specified directory
+pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
+    let mut entries = Vec::new();
+
+    if !directory.as_ref().is_dir() {
+        return Ok(entries);
+    }
+
+    let mut search_path = directory.as_ref().to_path_buf();
+    search_path.push("*");
+
+    let wide = encode_wide(prefixed(search_path));
+    let path = PCWSTR::from_raw(wide.as_ptr());
+    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+    let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
+
+    if handle.is_invalid() {
+        return Ok(entries);
+    }
+
+    try_readdir(handle, directory, &mut entries, recursive, with_mime_type)?;
+
+    Ok(entries)
+}
+
+fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
+    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
+
+    while unsafe { FindNextFileW(handle, &mut data) }.is_ok() {
+        let name = decode_wide(&data.cFileName);
+        if name == "." || name == ".." {
+            continue;
+        }
+
+        let mut full_path = parent.as_ref().to_path_buf();
+
+        if full_path.to_str().unwrap().ends_with(":") {
+            full_path.push(std::path::MAIN_SEPARATOR_STR);
+        }
+        full_path.push(name.clone());
+
+        let mime_type = if with_mime_type {
+            get_mime_type(&name)
+        } else {
+            String::new()
+        };
+
+        entries.push(Dirent {
+            name: name.clone(),
+            parent_path: parent.as_ref().to_string_lossy().to_string(),
+            full_path: full_path.to_string_lossy().to_string(),
+            attributes: get_attribute(full_path, &data)?,
+            mime_type,
+        });
+
+        if data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 && recursive {
+            let mut search_path = parent.as_ref().to_path_buf();
+            search_path.push(name);
+            let next_parent = search_path.clone();
+            search_path.push("*");
+            let wide = encode_wide(prefixed(search_path));
+            let path = PCWSTR::from_raw(wide.as_ptr());
+            let next_handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
+            if !next_handle.is_invalid() {
+                try_readdir(next_handle, next_parent, entries, recursive, with_mime_type)?;
+            }
+        }
+    }
+
+    unsafe { FindClose(handle).map_err(|e| e.message()) }?;
+
+    Ok(entries)
+}
+
 /// Gets file/directory attributes
 pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let wide = encode_wide(prefixed(file_path.as_ref()));
@@ -176,6 +250,33 @@ fn get_link_path<P: AsRef<Path>>(full_path: P) -> Result<(FileType, bool, String
     }
 }
 
+/// Create shortcut
+pub fn create_symlink<P1: AsRef<Path>, P2: AsRef<Path>>(full_path: P1, link_path: P2) -> Result<(), String> {
+    let _guard = ComGuard::new();
+
+    let shell_link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(|e| e.message()) }?;
+    if link_path.as_ref().is_file() {
+        if let Some(directory) = link_path.as_ref().parent() {
+            let wide = encode_wide(prefixed(directory));
+            let working_directory = PCWSTR::from_raw(wide.as_ptr());
+            unsafe { shell_link.SetWorkingDirectory(working_directory) }.map_err(|e| e.message())?;
+        }
+    }
+
+    let wide = encode_wide(prefixed(link_path.as_ref()));
+    let link_path = PCWSTR::from_raw(wide.as_ptr());
+    unsafe { shell_link.SetPath(link_path) }.map_err(|e| e.message())?;
+
+    let persist_file: IPersistFile = shell_link.cast().map_err(|e| e.message())?;
+    let mut symlink = full_path.as_ref().to_string_lossy().to_string();
+    symlink.push_str(".lnk");
+    let wide = encode_wide(prefixed(symlink));
+    let path = PCWSTR::from_raw(wide.as_ptr());
+    unsafe { persist_file.Save(path, true) }.map_err(|e| e.message())?;
+
+    Ok(())
+}
+
 /// Gets mime type of the file
 pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
     match mime_guess::from_path(file_path).first() {
@@ -192,80 +293,6 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> String {
     } else {
         String::new()
     }
-}
-
-/// Lists all files/directories under the specified directory
-pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
-    let mut entries = Vec::new();
-
-    if !directory.as_ref().is_dir() {
-        return Ok(entries);
-    }
-
-    let mut search_path = directory.as_ref().to_path_buf();
-    search_path.push("*");
-
-    let wide = encode_wide(prefixed(search_path));
-    let path = PCWSTR::from_raw(wide.as_ptr());
-    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
-    let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-
-    if handle.is_invalid() {
-        return Ok(entries);
-    }
-
-    try_readdir(handle, directory, &mut entries, recursive, with_mime_type)?;
-
-    Ok(entries)
-}
-
-fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
-    let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
-
-    while unsafe { FindNextFileW(handle, &mut data) }.is_ok() {
-        let name = decode_wide(&data.cFileName);
-        if name == "." || name == ".." {
-            continue;
-        }
-
-        let mut full_path = parent.as_ref().to_path_buf();
-
-        if full_path.to_str().unwrap().ends_with(":") {
-            full_path.push(std::path::MAIN_SEPARATOR_STR);
-        }
-        full_path.push(name.clone());
-
-        let mime_type = if with_mime_type {
-            get_mime_type(&name)
-        } else {
-            String::new()
-        };
-
-        entries.push(Dirent {
-            name: name.clone(),
-            parent_path: parent.as_ref().to_string_lossy().to_string(),
-            full_path: full_path.to_string_lossy().to_string(),
-            attributes: get_attribute(full_path, &data)?,
-            mime_type,
-        });
-
-        if data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 && recursive {
-            let mut search_path = parent.as_ref().to_path_buf();
-            search_path.push(name);
-            let next_parent = search_path.clone();
-            search_path.push("*");
-            let wide = encode_wide(prefixed(search_path));
-            let path = PCWSTR::from_raw(wide.as_ptr());
-            let next_handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-            if !next_handle.is_invalid() {
-                try_readdir(next_handle, next_parent, entries, recursive, with_mime_type)?;
-            }
-        }
-    }
-
-    unsafe { FindClose(handle).map_err(|e| e.message()) }?;
-
-    Ok(entries)
 }
 
 /// Moves an item

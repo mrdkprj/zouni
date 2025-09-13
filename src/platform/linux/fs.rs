@@ -101,62 +101,6 @@ pub fn list_volumes() -> Result<Vec<Volume>, String> {
     Ok(volumes)
 }
 
-/// Gets file/directory attributes
-pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
-    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-    let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
-    Ok(to_file_attribute(&info))
-}
-
-pub(crate) fn stat_inner<P: AsRef<Path>>(file_path: P) -> Result<FileInfo, String> {
-    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-    file.query_info(ATTRIBUTES_FOR_DIALOG, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())
-}
-
-fn to_file_attribute(info: &FileInfo) -> FileAttribute {
-    FileAttribute {
-        is_directory: info.file_type() == FileType::Directory,
-        is_read_only: info.boolean("filesystem::readonly"),
-        is_hidden: info.is_hidden(),
-        is_system: info.boolean("dos::is-system"),
-        is_device: info.file_type() == FileType::Mountable,
-        is_file: info.file_type() == FileType::Regular,
-        is_symbolic_link: info.is_symlink(),
-        ctime_ms: to_msecs(info.attribute_uint64("time::changed"), info.attribute_uint32("time::changed-usec")),
-        mtime_ms: to_msecs(info.attribute_uint64("time::modified"), info.attribute_uint32("time::modified-usec")),
-        atime_ms: to_msecs(info.attribute_uint64("time::access"), info.attribute_uint32("time::access-usec")),
-        birthtime_ms: to_msecs(info.attribute_uint64("time::created"), info.attribute_uint32("time::created-usec")),
-        size: info.size() as u64,
-        link_path: if info.is_symlink() {
-            info.symlink_target().unwrap_or_default().to_string_lossy().to_string()
-        } else {
-            String::new()
-        },
-    }
-}
-
-fn to_msecs(secs: u64, microsecs: u32) -> u64 {
-    secs * 1000 + (microsecs as u64) / 1000
-}
-
-/// Gets mime type of the file
-pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
-    match mime_guess::from_path(file_path).first() {
-        Some(s) => s.essence_str().to_string(),
-        None => String::new(),
-    }
-}
-
-#[allow(dead_code)]
-fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
-    if !file_path.as_ref().is_file() {
-        return Ok(String::new());
-    }
-
-    let (ctype, _) = gtk::gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap()), &[0]);
-    Ok(ctype.to_string())
-}
-
 /// Lists all files/directories under the specified directory
 pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bool) -> Result<Vec<Dirent>, String> {
     if !directory.as_ref().is_dir() {
@@ -198,6 +142,68 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
     }
 
     Ok(entries)
+}
+
+/// Gets file/directory attributes
+pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
+    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
+    let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
+    Ok(to_file_attribute(&info))
+}
+
+pub(crate) fn stat_inner<P: AsRef<Path>>(file_path: P) -> Result<FileInfo, String> {
+    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
+    file.query_info(ATTRIBUTES_FOR_DIALOG, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())
+}
+
+fn to_file_attribute(info: &FileInfo) -> FileAttribute {
+    FileAttribute {
+        is_directory: info.file_type() == FileType::Directory,
+        is_read_only: info.boolean("filesystem::readonly"),
+        is_hidden: info.is_hidden(),
+        is_system: info.boolean("dos::is-system"),
+        is_device: info.file_type() == FileType::Mountable,
+        is_file: info.file_type() == FileType::Regular,
+        is_symbolic_link: info.is_symlink(),
+        ctime_ms: to_msecs(info.attribute_uint64("time::changed"), info.attribute_uint32("time::changed-usec")),
+        mtime_ms: to_msecs(info.attribute_uint64("time::modified"), info.attribute_uint32("time::modified-usec")),
+        atime_ms: to_msecs(info.attribute_uint64("time::access"), info.attribute_uint32("time::access-usec")),
+        birthtime_ms: to_msecs(info.attribute_uint64("time::created"), info.attribute_uint32("time::created-usec")),
+        size: info.size() as u64,
+        link_path: if info.is_symlink() {
+            info.symlink_target().unwrap_or_default().to_string_lossy().to_string()
+        } else {
+            String::new()
+        },
+    }
+}
+
+fn to_msecs(secs: u64, microsecs: u32) -> u64 {
+    secs * 1000 + (microsecs as u64) / 1000
+}
+
+/// Create shortcut
+pub fn create_symlink<P1: AsRef<Path>, P2: AsRef<Path>>(full_path: P1, link_path: P2) -> Result<(), String> {
+    let file = gio::File::for_path(full_path);
+    file.make_symbolic_link(link_path, Cancellable::NONE).map_err(|e| e.message().to_string())
+}
+
+/// Gets mime type of the file
+pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
+    match mime_guess::from_path(file_path).first() {
+        Some(s) => s.essence_str().to_string(),
+        None => String::new(),
+    }
+}
+
+#[allow(dead_code)]
+fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
+    if !file_path.as_ref().is_file() {
+        return Ok(String::new());
+    }
+
+    let (ctype, _) = gtk::gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap()), &[0]);
+    Ok(ctype.to_string())
 }
 
 fn register_cancellable() -> (u32, Cancellable) {

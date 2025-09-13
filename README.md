@@ -27,6 +27,7 @@ Variety of functions that `std` does not offer or `std` offers but are not satis
 - trash_all
 - undelete
 - utimes
+- create_symlink
 
 ## shell
 - open_path
