@@ -83,6 +83,28 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
     apps
 }
 
+/// Extract icon from executable.
+pub fn extract_icon<P: AsRef<Path>>(path_or_name: P) -> Result<String, String> {
+    init();
+
+    for info in gtk::gio::AppInfo::all() {
+        if path_or_name.as_ref() == info.executable() {
+            if let Some(icon) = info.icon() {
+                let icon_path = if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
+                    resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str())
+                } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
+                    file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
+                } else {
+                    String::new()
+                };
+                return Ok(icon_path);
+            }
+        }
+    }
+
+    Ok(String::new())
+}
+
 /// Shows the file/directory property dialog
 pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let info = fs::stat_inner(file_path.as_ref())?;
