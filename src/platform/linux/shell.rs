@@ -95,14 +95,14 @@ pub fn extract_icon<P: AsRef<Path>>(path_or_name: P) -> Result<String, String> {
                 } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
                     file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
                 } else {
-                    String::new()
+                    return Err("No icon found".to_string());
                 };
                 return Ok(icon_path);
             }
         }
     }
 
-    Ok(String::new())
+    Err("No icon found".to_string())
 }
 
 /// Shows the file/directory property dialog
