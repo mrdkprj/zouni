@@ -127,8 +127,14 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
         }
         full_path.push(name.clone());
 
+        let attributes = get_attribute(&full_path, &data)?;
+
         let mime_type = if with_mime_type {
-            get_mime_type(&name)
+            get_mime_type(if attributes.is_symbolic_link {
+                &attributes.link_path
+            } else {
+                &name
+            })
         } else {
             String::new()
         };
@@ -137,7 +143,7 @@ fn try_readdir<P: AsRef<Path>>(handle: HANDLE, parent: P, entries: &mut Vec<Dire
             name: name.clone(),
             parent_path: parent.as_ref().to_string_lossy().to_string(),
             full_path: full_path.to_string_lossy().to_string(),
-            attributes: get_attribute(full_path, &data)?,
+            attributes,
             mime_type,
         });
 
@@ -167,13 +173,13 @@ pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
 
     let mut data: WIN32_FIND_DATAW = unsafe { std::mem::zeroed() };
     let handle = unsafe { FindFirstFileExW(path, FindExInfoBasic, &mut data as *mut _ as _, FindExSearchNameMatch, None, FIND_FIRST_EX_FLAGS(0)).map_err(|e| e.message()) }?;
-    let file_attributes = get_attribute(file_path, &data)?;
+    let file_attributes = get_attribute(&file_path, &data)?;
     unsafe { FindClose(handle).map_err(|e| e.message()) }?;
 
     Ok(file_attributes)
 }
 
-fn get_attribute<P: AsRef<Path>>(file_path: P, data: &WIN32_FIND_DATAW) -> Result<FileAttribute, String> {
+fn get_attribute<P: AsRef<Path>>(file_path: &P, data: &WIN32_FIND_DATAW) -> Result<FileAttribute, String> {
     let attributes = data.dwFileAttributes;
     let possible_file_type = get_file_type(&file_path, attributes);
     let (file_type, is_symbolic_link, link_path) = if possible_file_type == FileType::Link {

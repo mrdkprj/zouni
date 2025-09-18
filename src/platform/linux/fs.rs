@@ -121,8 +121,15 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
         let mut full_path = dir.path().unwrap().to_path_buf();
         full_path.push(name.clone());
 
+        let full_path_string = full_path.to_string_lossy().to_string();
+        let attributes = to_file_attribute(&info);
+
         let mime_type = if with_mime_type {
-            get_mime_type(&full_path)
+            get_mime_type(if attributes.is_symbolic_link {
+                &attributes.link_path
+            } else {
+                &full_path_string
+            })
         } else {
             String::new()
         };
@@ -130,8 +137,8 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
         entries.push(Dirent {
             name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
             parent_path: dir.path().unwrap().to_string_lossy().to_string(),
-            full_path: full_path.to_string_lossy().to_string(),
-            attributes: to_file_attribute(&info),
+            full_path: full_path_string,
+            attributes,
             mime_type,
         });
 
