@@ -13,10 +13,9 @@ use gtk::{
         AppInfoCreateFlags, AppLaunchContext, Cancellable, DBusCallFlags, DBusConnectionFlags, File, FileIcon, ThemedIcon,
     },
     glib::DateTime,
-};
-use gtk::{
-    prelude::{IconThemeExt, WidgetExt},
-    AppChooserDialog, DialogFlags, IconLookupFlags, IconSize, IconTheme,
+    prelude::{AppChooserExt, IconThemeExt, WidgetExt},
+    traits::{AppChooserDialogExt, DialogExt, GtkWindowExt},
+    AppChooserDialog, DialogFlags, IconLookupFlags, IconSize, IconTheme, ResponseType,
 };
 use std::path::Path;
 
@@ -42,7 +41,19 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
     init();
     let file = File::for_path(file_path.as_ref().to_str().unwrap());
     let dialog = AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
-    dialog.show_all();
+
+    dialog.connect_response(move |dialog, response_type| {
+        if response_type == ResponseType::Ok {
+            if let Some(app_info) = dialog.app_info() {
+                let _ = app_info.launch(&[dialog.gfile().unwrap()], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
+            }
+        }
+
+        dialog.close();
+    });
+
+    dialog.show();
+
     Ok(())
 }
 
