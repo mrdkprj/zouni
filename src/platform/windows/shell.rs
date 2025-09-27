@@ -82,6 +82,24 @@ pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) ->
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
+pub fn execute_as<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    let _guard = ComGuard::new();
+
+    let wide_verb = encode_wide("runas");
+    let app_path = encode_wide(app_path.as_ref());
+    let file_path = encode_wide(file_path.as_ref());
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        hwnd: HWND::default(),
+        lpVerb: PCWSTR::from_raw(wide_verb.as_ptr()),
+        lpFile: PCWSTR::from_raw(app_path.as_ptr()),
+        lpParameters: PCWSTR::from_raw(file_path.as_ptr()),
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
+}
+
 /// Shows the application chooser dialog
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _guard = ComGuard::new();

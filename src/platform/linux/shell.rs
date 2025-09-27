@@ -36,6 +36,10 @@ pub fn execute<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) ->
     info.launch(&[File::for_path(file_path)], AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
+pub fn execute_as<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2) -> Result<(), String> {
+    execute(file_path, app_path)
+}
+
 /// Shows the application chooser dialog
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     init();

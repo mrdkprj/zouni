@@ -499,10 +499,11 @@ struct TrashData {
 const TRASH_PATH_STR: &str = "trash:///";
 
 /// Undos a trash operation
-pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
+pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     let trash_file = File::for_uri(TRASH_PATH_STR);
 
     if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        let file_paths: Vec<String> = file_paths.iter().map(|f| f.as_ref().to_string_lossy().to_string()).collect();
         let mut map: HashMap<String, TrashData> = HashMap::new();
         while let Some(Ok(info)) = children.next() {
             let orig_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {

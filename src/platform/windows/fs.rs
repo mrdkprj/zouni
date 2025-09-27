@@ -462,9 +462,10 @@ struct ItemData {
 }
 
 /// Undos a trash operation
-pub fn undelete(file_paths: Vec<String>) -> Result<(), String> {
+pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     let _guard = ComGuard::new();
 
+    let file_paths: Vec<String> = file_paths.iter().map(|f| f.as_ref().to_string_lossy().to_string()).collect();
     let recycle_bin_item: *mut ITEMIDLIST = unsafe { SHGetKnownFolderIDList(&FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT.0 as _, None).map_err(|e| e.message()) }?;
     let desktop: IShellFolder = unsafe { SHGetDesktopFolder().map_err(|e| e.message()) }?;
     let pbc = unsafe { windows::Win32::System::Com::CreateBindCtx(0).map_err(|e| e.message()) }?;
