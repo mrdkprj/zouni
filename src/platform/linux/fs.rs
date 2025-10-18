@@ -1,5 +1,5 @@
 use super::util::init;
-use crate::{Dirent, FileAttribute, Volume};
+use crate::{Dirent, FileAttribute, RecycleBinItem, Volume};
 use async_std::channel::Sender;
 use gio::{
     ffi::{G_FILE_MEASURE_APPARENT_SIZE, G_FILE_QUERY_INFO_NONE},
@@ -36,6 +36,8 @@ static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
 const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
 const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
+const ATTRIBUTES_FOR_RECYCLE: &str =
+    "trash::orig-path,trash::deletion-date,filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
 const IO_CANCEL: &str = "IO_CANCEL";
 
 /// Lists volumes
@@ -497,6 +499,46 @@ struct TrashData {
 }
 
 const TRASH_PATH_STR: &str = "trash:///";
+
+/// Gets items in recycle bin
+pub fn recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
+    let trash_file = File::for_uri(TRASH_PATH_STR);
+    let mut result = Vec::new();
+
+    if let Ok(mut children) = trash_file.enumerate_children(ATTRIBUTES_FOR_RECYCLE, FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        while let Some(Ok(info)) = children.next() {
+            let original_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
+                path.to_string()
+            } else {
+                String::new()
+            };
+            let name = if let Some(name) = info.attribute_as_string("standard::name") {
+                name.to_string()
+            } else {
+                String::new()
+            };
+
+            let deleted_date_ms = if let Some(delete_date_string) = info.attribute_as_string("trash::deletion-date") {
+                gtk::glib::DateTime::from_iso8601(&delete_date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix() as u64
+            } else {
+                0
+            };
+
+            let attributes = to_file_attribute(&info);
+            let mime_type = get_mime_type(&original_path);
+
+            let bin_item = RecycleBinItem {
+                name,
+                original_path,
+                deleted_date_ms,
+                attributes,
+                mime_type,
+            };
+            result.push(bin_item);
+        }
+    }
+    Ok(result)
+}
 
 /// Undos a trash operation
 pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {

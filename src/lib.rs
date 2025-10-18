@@ -18,6 +18,15 @@ pub struct Volume {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dirent {
+    pub name: String,
+    pub parent_path: String,
+    pub full_path: String,
+    pub attributes: FileAttribute,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileAttribute {
     pub is_directory: bool,
     pub is_read_only: bool,
@@ -48,15 +57,6 @@ pub struct ClipboardData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Dirent {
-    pub name: String,
-    pub parent_path: String,
-    pub full_path: String,
-    pub attributes: FileAttribute,
-    pub mime_type: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
     pub path: String,
     pub name: String,
@@ -78,4 +78,13 @@ pub struct ThumbButton {
     pub id: String,
     pub tool_tip: Option<String>,
     pub icon: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecycleBinItem {
+    pub name: String,
+    pub original_path: String,
+    pub deleted_date_ms: u64,
+    pub attributes: FileAttribute,
+    pub mime_type: String,
 }
