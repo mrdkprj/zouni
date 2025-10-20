@@ -1,5 +1,5 @@
 use super::util::init;
-use crate::{Dirent, FileAttribute, RecycleBinItem, Volume};
+use crate::{Dirent, FileAttribute, RecycleBinItem, UndeleteRequest, Volume};
 use async_std::channel::Sender;
 use gio::{
     ffi::{G_FILE_MEASURE_APPARENT_SIZE, G_FILE_QUERY_INFO_NONE},
@@ -501,7 +501,7 @@ struct TrashData {
 const TRASH_PATH_STR: &str = "trash:///";
 
 /// Gets items in recycle bin
-pub fn recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
+pub fn read_recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
     let trash_file = File::for_uri(TRASH_PATH_STR);
     let mut result = Vec::new();
 
@@ -591,6 +591,62 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// Undos a trash operation by deleted time
+pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
+    let trash_file = File::for_uri(TRASH_PATH_STR);
+
+    if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        let args: HashMap<String, u64> = targets.iter().map(|target| (target.file_path.clone(), target.deleted_time_ms)).collect();
+        let mut map: HashMap<String, TrashData> = HashMap::new();
+        while let Some(Ok(info)) = children.next() {
+            let orig_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
+                path.to_string()
+            } else {
+                String::new()
+            };
+
+            let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
+            let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
+
+            if args.contains_key(&orig_path) && *args.get(&orig_path).unwrap() == date as u64 {
+                let _ = map.insert(
+                    orig_path,
+                    TrashData {
+                        date,
+                        name: info.name().to_string_lossy().to_string(),
+                    },
+                );
+            }
+        }
+
+        for (orig_path, trash_data) in map.iter() {
+            let mut trash_path = String::from(TRASH_PATH_STR);
+            trash_path.push_str(&trash_data.name);
+
+            File::for_uri(&trash_path)
+                .move_(&File::for_parse_name(orig_path), FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Cancellable::NONE, None)
+                .map_err(|e| e.message().to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(unused_variables)]
+/// Empty Recycle Bin
+/// Parameter "root" has no effect on Linux
+pub fn empty_recycle_bin(root: Option<String>) -> Result<(), String> {
+    let trash_file = File::for_uri(TRASH_PATH_STR);
+    if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        while let Some(Ok(info)) = children.next() {
+            let mut trash_path = String::from(TRASH_PATH_STR);
+            trash_path.push_str(&info.name().to_str().unwrap());
+            File::for_uri(&trash_path).delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+        }
+    }
     Ok(())
 }
 

@@ -88,3 +88,9 @@ pub struct RecycleBinItem {
     pub attributes: FileAttribute,
     pub mime_type: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UndeleteRequest {
+    pub file_path: String,
+    pub deleted_time_ms: u64,
+}

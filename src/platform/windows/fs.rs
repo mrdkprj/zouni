@@ -2,7 +2,7 @@ use super::{
     shell,
     util::{decode_wide, encode_wide, prefixed, ComGuard},
 };
-use crate::{Dirent, FileAttribute, RecycleBinItem, Volume};
+use crate::{Dirent, FileAttribute, RecycleBinItem, UndeleteRequest, Volume};
 use std::{collections::HashMap, path::Path};
 use windows::{
     core::{Interface, PCSTR, PCWSTR},
@@ -21,9 +21,9 @@ use windows::{
         UI::Shell::{
             Common::{ITEMIDLIST, STRRET},
             FMTID_Storage, FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray, IShellLinkW,
-            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetDataFromIDListW, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, ShellLink, CMINVOKECOMMANDINFO,
-            FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDFIL_FINDDATA, SHGDN_NORMAL,
-            SLGP_UNCPRIORITY,
+            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHEmptyRecycleBinW, SHGetDataFromIDListW, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, ShellLink,
+            CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS,
+            SHGDFIL_FINDDATA, SHGDN_NORMAL, SLGP_UNCPRIORITY,
         },
     },
 };
@@ -461,21 +461,20 @@ const PKEY_DELETED_DATE: PROPERTYKEY = PROPERTYKEY {
     pid: PID_DISPLACED_DATE,
 };
 
-struct ItemData {
-    date: f64,
-    item: *mut ITEMIDLIST,
-}
-
-/// Gets items in recycle bin
-pub fn recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
-    let _guard = ComGuard::new();
-
+fn get_recycle_bin() -> Result<IShellFolder2, String> {
     let recycle_bin_item: *mut ITEMIDLIST = unsafe { SHGetKnownFolderIDList(&FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT.0 as _, None).map_err(|e| e.message()) }?;
     let desktop: IShellFolder = unsafe { SHGetDesktopFolder().map_err(|e| e.message()) }?;
     let pbc = unsafe { CreateBindCtx(0).map_err(|e| e.message()) }?;
     let recycle_bin: IShellFolder2 = unsafe { desktop.BindToObject(recycle_bin_item, &pbc).map_err(|e| e.message()) }?;
     unsafe { CoTaskMemFree(Some(recycle_bin_item as _)) };
+    Ok(recycle_bin)
+}
 
+/// Gets items in recycle bin
+pub fn read_recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
+    let _guard = ComGuard::new();
+
+    let recycle_bin = get_recycle_bin()?;
     let mut enum_list: Option<IEnumIDList> = None;
     let _ = unsafe { recycle_bin.EnumObjects(HWND::default(), (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as _, &mut enum_list) };
 
@@ -496,18 +495,9 @@ pub fn recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
 
         let item = *(rgelt.first().unwrap());
 
-        let mut street: STRRET = STRRET::default();
-        unsafe { recycle_bin.GetDisplayNameOf(item, SHGDN_NORMAL, &mut street).map_err(|e| e.message()) }?;
-        let original_path = decode_wide(unsafe { street.Anonymous.pOleStr.as_wide() });
+        let original_path = to_original_path(&recycle_bin, item)?;
         let name = Path::new(&original_path).file_name().unwrap_or_default().to_string_lossy().to_string();
-
-        let mut src = unsafe { recycle_bin.GetDetailsEx(item, &PKEY_DELETED_DATE).map_err(|e| e.message()) }?;
-        let mut variant = VARIANT::default();
-        unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_DATE).map_err(|e| e.message()) }?;
-        let file_time = unsafe { VariantToFileTime(&variant, PSTIME_FLAGS(0)) }.unwrap();
-        let deleted_date_ms = to_msecs_from_file_time(file_time.dwLowDateTime, file_time.dwHighDateTime);
-        unsafe { VariantClear(&mut variant).map_err(|e| e.message()) }?;
-        unsafe { VariantClear(&mut src).map_err(|e| e.message()) }?;
+        let deleted_date_ms = to_time_ms_from_variant(&recycle_bin, item, &PKEY_DELETED_DATE)?;
 
         let mut src = unsafe { recycle_bin.GetDetailsEx(item, &PKEY_SIZE).map_err(|e| e.message()) }?;
         let mut variant = VARIANT::default();
@@ -545,17 +535,16 @@ pub fn recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
     Ok(result)
 }
 
+struct ItemData {
+    deleted_date_ms: u64,
+    item: *mut ITEMIDLIST,
+}
 /// Undos a trash operation
 pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
     let _guard = ComGuard::new();
 
     let file_paths: Vec<String> = file_paths.iter().map(|f| f.as_ref().to_string_lossy().to_string()).collect();
-    let recycle_bin_item: *mut ITEMIDLIST = unsafe { SHGetKnownFolderIDList(&FOLDERID_RecycleBinFolder, KF_FLAG_DEFAULT.0 as _, None).map_err(|e| e.message()) }?;
-    let desktop: IShellFolder = unsafe { SHGetDesktopFolder().map_err(|e| e.message()) }?;
-    let pbc = unsafe { CreateBindCtx(0).map_err(|e| e.message()) }?;
-    let recycle_bin: IShellFolder2 = unsafe { desktop.BindToObject(recycle_bin_item, &pbc).map_err(|e| e.message()) }?;
-    unsafe { CoTaskMemFree(Some(recycle_bin_item as _)) };
-
+    let recycle_bin = get_recycle_bin()?;
     let mut enum_list: Option<IEnumIDList> = None;
     let _ = unsafe { recycle_bin.EnumObjects(HWND::default(), (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as _, &mut enum_list) };
 
@@ -576,26 +565,18 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 
         let item = *(rgelt.first().unwrap());
 
-        let mut street: STRRET = STRRET::default();
-        unsafe { recycle_bin.GetDisplayNameOf(item, SHGDN_NORMAL, &mut street).map_err(|e| e.message()) }?;
-        let old_path = decode_wide(unsafe { street.Anonymous.pOleStr.as_wide() });
-
-        let mut src = unsafe { recycle_bin.GetDetailsEx(item, &PKEY_DELETED_DATE).map_err(|e| e.message()) }?;
-        let mut variant = VARIANT::default();
-        unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_DATE).map_err(|e| e.message()) }?;
-        let date = unsafe { variant.Anonymous.Anonymous.Anonymous.date };
-        unsafe { VariantClear(&mut variant).map_err(|e| e.message()) }?;
-        unsafe { VariantClear(&mut src).map_err(|e| e.message()) }?;
+        let old_path = to_original_path(&recycle_bin, item)?;
+        let deleted_date_ms = to_time_ms_from_variant(&recycle_bin, item, &PKEY_DELETED_DATE)?;
 
         if file_paths.contains(&old_path) {
             let data = ItemData {
-                date,
+                deleted_date_ms,
                 item,
             };
 
             if map.contains_key(&old_path) {
                 let old = map.get(&old_path).unwrap();
-                if old.date < date {
+                if old.deleted_date_ms < deleted_date_ms {
                     let old = map.insert(old_path, data).unwrap();
                     unsafe { CoTaskMemFree(Some(old.item as _)) };
                 }
@@ -632,6 +613,100 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
             }
         }
     }
+
+    Ok(())
+}
+
+/// Undos a trash operation by deleted time
+pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
+    let _guard = ComGuard::new();
+
+    let args: HashMap<String, u64> = targets.iter().map(|target| (target.file_path.clone(), target.deleted_time_ms)).collect();
+    let recycle_bin = get_recycle_bin()?;
+    let mut enum_list: Option<IEnumIDList> = None;
+    let _ = unsafe { recycle_bin.EnumObjects(HWND::default(), (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as _, &mut enum_list) };
+
+    if enum_list.is_none() {
+        return Ok(());
+    }
+
+    let list = enum_list.unwrap();
+    let mut rgelt: Vec<*mut ITEMIDLIST> = vec![std::ptr::null_mut()];
+    let cnt: Option<*mut u32> = None;
+
+    let mut items: Vec<*const ITEMIDLIST> = Vec::new();
+
+    while unsafe { list.Next(&mut rgelt, cnt) } == S_OK {
+        if rgelt.is_empty() {
+            continue;
+        }
+
+        let item = *(rgelt.first().unwrap());
+
+        let old_path = to_original_path(&recycle_bin, item)?;
+        let deleted_date_ms = to_time_ms_from_variant(&recycle_bin, item, &PKEY_DELETED_DATE)?;
+
+        if args.contains_key(&old_path) && *args.get(&old_path).unwrap() == deleted_date_ms {
+            println!("yes found");
+            items.push(item);
+        } else {
+            unsafe { CoTaskMemFree(Some(item as _)) };
+        }
+
+        rgelt = vec![std::ptr::null_mut()];
+    }
+
+    if !items.is_empty() {
+        let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
+        let invoke = CMINVOKECOMMANDINFO {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
+            lpVerb: PCSTR(b"undelete\0".as_ptr()),
+            ..Default::default()
+        };
+
+        match unsafe { menu.InvokeCommand(&invoke) } {
+            Ok(_) => {
+                for item in items {
+                    unsafe { CoTaskMemFree(Some(item as _)) };
+                }
+            }
+            Err(_) => {
+                for item in items {
+                    unsafe { CoTaskMemFree(Some(item as _)) };
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn to_original_path(recycle_bin: &IShellFolder2, item: *const ITEMIDLIST) -> Result<String, String> {
+    let mut street: STRRET = STRRET::default();
+    unsafe { recycle_bin.GetDisplayNameOf(item, SHGDN_NORMAL, &mut street).map_err(|e| e.message()) }?;
+    let original_path = decode_wide(unsafe { street.Anonymous.pOleStr.as_wide() });
+    Ok(original_path)
+}
+
+fn to_time_ms_from_variant(recycle_bin: &IShellFolder2, item: *const ITEMIDLIST, key: &PROPERTYKEY) -> Result<u64, String> {
+    let mut src = unsafe { recycle_bin.GetDetailsEx(item, key).map_err(|e| e.message()) }?;
+    let mut variant = VARIANT::default();
+    unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_DATE).map_err(|e| e.message()) }?;
+    let file_time = unsafe { VariantToFileTime(&variant, PSTIME_FLAGS(0)) }.unwrap();
+    let time_ms = to_msecs_from_file_time(file_time.dwLowDateTime, file_time.dwHighDateTime);
+    unsafe { VariantClear(&mut variant).map_err(|e| e.message()) }?;
+    unsafe { VariantClear(&mut src).map_err(|e| e.message()) }?;
+    Ok(time_ms)
+}
+
+/// Empty Recycle Bin
+pub fn empty_recycle_bin(root: Option<String>) -> Result<(), String> {
+    let drive = if let Some(root) = root {
+        PCWSTR::from_raw(encode_wide(root).as_ptr())
+    } else {
+        PCWSTR::null()
+    };
+    unsafe { SHEmptyRecycleBinW(None, drive, 0).map_err(|e| e.to_string()) }?;
 
     Ok(())
 }
