@@ -81,7 +81,7 @@ pub struct ThumbButton {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecycleBinItem {
+pub struct RecycleBinDirent {
     pub name: String,
     pub original_path: String,
     pub deleted_date_ms: u64,
@@ -90,7 +90,7 @@ pub struct RecycleBinItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UndeleteRequest {
-    pub file_path: String,
+pub struct RecycleBinItem {
+    pub original_path: String,
     pub deleted_time_ms: u64,
 }

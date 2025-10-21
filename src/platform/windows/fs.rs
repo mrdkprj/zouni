@@ -2,7 +2,7 @@ use super::{
     shell,
     util::{decode_wide, encode_wide, prefixed, ComGuard},
 };
-use crate::{Dirent, FileAttribute, RecycleBinItem, UndeleteRequest, Volume};
+use crate::{Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
 use std::{collections::HashMap, path::Path};
 use windows::{
     core::{Interface, PCSTR, PCWSTR},
@@ -471,7 +471,7 @@ fn get_recycle_bin() -> Result<IShellFolder2, String> {
 }
 
 /// Gets items in recycle bin
-pub fn read_recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
+pub fn read_recycle_bin() -> Result<Vec<RecycleBinDirent>, String> {
     let _guard = ComGuard::new();
 
     let recycle_bin = get_recycle_bin()?;
@@ -518,7 +518,7 @@ pub fn read_recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
         let mut attributes = get_attribute(&original_path, &data)?;
         attributes.size = size;
 
-        let bin_item = RecycleBinItem {
+        let bin_item = RecycleBinDirent {
             name,
             original_path,
             deleted_date_ms,
@@ -618,42 +618,12 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 }
 
 /// Undos a trash operation by deleted time
-pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
+pub fn undelete_by_time(targets: &[RecycleBinItem]) -> Result<(), String> {
     let _guard = ComGuard::new();
 
-    let args: HashMap<String, u64> = targets.iter().map(|target| (target.file_path.clone(), target.deleted_time_ms)).collect();
     let recycle_bin = get_recycle_bin()?;
-    let mut enum_list: Option<IEnumIDList> = None;
-    let _ = unsafe { recycle_bin.EnumObjects(HWND::default(), (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as _, &mut enum_list) };
-
-    if enum_list.is_none() {
-        return Ok(());
-    }
-
-    let list = enum_list.unwrap();
-    let mut rgelt: Vec<*mut ITEMIDLIST> = vec![std::ptr::null_mut()];
-    let cnt: Option<*mut u32> = None;
-
-    let mut items: Vec<*const ITEMIDLIST> = Vec::new();
-
-    while unsafe { list.Next(&mut rgelt, cnt) } == S_OK {
-        if rgelt.is_empty() {
-            continue;
-        }
-
-        let item = *(rgelt.first().unwrap());
-
-        let old_path = to_original_path(&recycle_bin, item)?;
-        let deleted_date_ms = to_time_ms_from_variant(&recycle_bin, item, &PKEY_DELETED_DATE)?;
-
-        if args.contains_key(&old_path) && *args.get(&old_path).unwrap() == deleted_date_ms {
-            items.push(item);
-        } else {
-            unsafe { CoTaskMemFree(Some(item as _)) };
-        }
-
-        rgelt = vec![std::ptr::null_mut()];
-    }
+    let args: HashMap<String, u64> = targets.iter().map(|target| (target.original_path.clone(), target.deleted_time_ms)).collect();
+    let items = find_items_in_recycle_bin(&recycle_bin, args)?;
 
     if !items.is_empty() {
         let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
@@ -678,6 +648,74 @@ pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Delete files in Recycle Bin
+pub fn delete_from_recycle_bin(targets: &[RecycleBinItem]) -> Result<(), String> {
+    let _guard = ComGuard::new();
+
+    let recycle_bin = get_recycle_bin()?;
+    let args: HashMap<String, u64> = targets.iter().map(|target| (target.original_path.clone(), target.deleted_time_ms)).collect();
+    let items = find_items_in_recycle_bin(&recycle_bin, args)?;
+
+    if !items.is_empty() {
+        let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
+        let invoke = CMINVOKECOMMANDINFO {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
+            lpVerb: PCSTR(b"delete\0".as_ptr()),
+            ..Default::default()
+        };
+
+        match unsafe { menu.InvokeCommand(&invoke) } {
+            Ok(_) => {
+                for item in items {
+                    unsafe { CoTaskMemFree(Some(item as _)) };
+                }
+            }
+            Err(_) => {
+                for item in items {
+                    unsafe { CoTaskMemFree(Some(item as _)) };
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn find_items_in_recycle_bin(recycle_bin: &IShellFolder2, map: HashMap<String, u64>) -> Result<Vec<*const ITEMIDLIST>, String> {
+    let mut enum_list: Option<IEnumIDList> = None;
+    let _ = unsafe { recycle_bin.EnumObjects(HWND::default(), (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as _, &mut enum_list) };
+
+    if enum_list.is_none() {
+        return Ok(Vec::new());
+    }
+
+    let list = enum_list.unwrap();
+    let mut rgelt: Vec<*mut ITEMIDLIST> = vec![std::ptr::null_mut()];
+    let cnt: Option<*mut u32> = None;
+
+    let mut items: Vec<*const ITEMIDLIST> = Vec::new();
+
+    while unsafe { list.Next(&mut rgelt, cnt) } == S_OK {
+        if rgelt.is_empty() {
+            continue;
+        }
+
+        let item = *(rgelt.first().unwrap());
+
+        let old_path = to_original_path(recycle_bin, item)?;
+        let deleted_date_ms = to_time_ms_from_variant(recycle_bin, item, &PKEY_DELETED_DATE)?;
+
+        if map.contains_key(&old_path) && *map.get(&old_path).unwrap() == deleted_date_ms {
+            items.push(item);
+        } else {
+            unsafe { CoTaskMemFree(Some(item as _)) };
+        }
+
+        rgelt = vec![std::ptr::null_mut()];
+    }
+    Ok(items)
 }
 
 fn to_original_path(recycle_bin: &IShellFolder2, item: *const ITEMIDLIST) -> Result<String, String> {

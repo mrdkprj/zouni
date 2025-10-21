@@ -1,10 +1,10 @@
 use super::util::init;
-use crate::{Dirent, FileAttribute, RecycleBinItem, UndeleteRequest, Volume};
+use crate::{Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
 use async_std::channel::Sender;
 use gio::{
     ffi::{G_FILE_MEASURE_APPARENT_SIZE, G_FILE_QUERY_INFO_NONE},
     glib::ObjectExt,
-    FileMeasureFlags, IOErrorEnum,
+    FileEnumerator, FileMeasureFlags, IOErrorEnum,
 };
 use gtk::{
     gio::{
@@ -501,7 +501,7 @@ struct TrashData {
 const TRASH_PATH_STR: &str = "trash:///";
 
 /// Gets items in recycle bin
-pub fn read_recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
+pub fn read_recycle_bin() -> Result<Vec<RecycleBinDirent>, String> {
     let trash_file = File::for_uri(TRASH_PATH_STR);
     let mut result = Vec::new();
 
@@ -527,7 +527,7 @@ pub fn read_recycle_bin() -> Result<Vec<RecycleBinItem>, String> {
             let attributes = to_file_attribute(&info);
             let mime_type = get_mime_type(&original_path);
 
-            let bin_item = RecycleBinItem {
+            let bin_item = RecycleBinDirent {
                 name,
                 original_path,
                 deleted_date_ms,
@@ -595,32 +595,12 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
 }
 
 /// Undos a trash operation by deleted time
-pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
+pub fn undelete_by_time(targets: &[RecycleBinItem]) -> Result<(), String> {
     let trash_file = File::for_uri(TRASH_PATH_STR);
 
-    if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
-        let args: HashMap<String, u64> = targets.iter().map(|target| (target.file_path.clone(), target.deleted_time_ms)).collect();
-        let mut map: HashMap<String, TrashData> = HashMap::new();
-        while let Some(Ok(info)) = children.next() {
-            let orig_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
-                path.to_string()
-            } else {
-                String::new()
-            };
-
-            let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
-            let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
-
-            if args.contains_key(&orig_path) && *args.get(&orig_path).unwrap() == date as u64 {
-                let _ = map.insert(
-                    orig_path,
-                    TrashData {
-                        date,
-                        name: info.name().to_string_lossy().to_string(),
-                    },
-                );
-            }
-        }
+    if let Ok(children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        let args: HashMap<String, u64> = targets.iter().map(|target| (target.original_path.clone(), target.deleted_time_ms)).collect();
+        let map = find_items_in_recycle_bin(children, args)?;
 
         for (orig_path, trash_data) in map.iter() {
             let mut trash_path = String::from(TRASH_PATH_STR);
@@ -633,6 +613,50 @@ pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Delete files in Recycle Bin
+pub fn delete_from_recycle_bin(targets: &[RecycleBinItem]) -> Result<(), String> {
+    let trash_file = File::for_uri(TRASH_PATH_STR);
+
+    if let Ok(children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        let args: HashMap<String, u64> = targets.iter().map(|target| (target.original_path.clone(), target.deleted_time_ms)).collect();
+        let map = find_items_in_recycle_bin(children, args)?;
+
+        for (_, trash_data) in map.iter() {
+            let mut trash_path = String::from(TRASH_PATH_STR);
+            trash_path.push_str(&trash_data.name);
+
+            File::for_uri(&trash_path).delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn find_items_in_recycle_bin(mut children: FileEnumerator, map: HashMap<String, u64>) -> Result<HashMap<String, TrashData>, String> {
+    let mut items: HashMap<String, TrashData> = HashMap::new();
+    while let Some(Ok(info)) = children.next() {
+        let orig_path = if let Some(path) = info.attribute_as_string("trash::orig-path") {
+            path.to_string()
+        } else {
+            String::new()
+        };
+
+        let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
+        let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
+
+        if map.contains_key(&orig_path) && *map.get(&orig_path).unwrap() == date as u64 {
+            let _ = items.insert(
+                orig_path,
+                TrashData {
+                    date,
+                    name: info.name().to_string_lossy().to_string(),
+                },
+            );
+        }
+    }
+    Ok(items)
 }
 
 #[allow(unused_variables)]
