@@ -647,7 +647,6 @@ pub fn undelete_by_time(targets: &[UndeleteRequest]) -> Result<(), String> {
         let deleted_date_ms = to_time_ms_from_variant(&recycle_bin, item, &PKEY_DELETED_DATE)?;
 
         if args.contains_key(&old_path) && *args.get(&old_path).unwrap() == deleted_date_ms {
-            println!("yes found");
             items.push(item);
         } else {
             unsafe { CoTaskMemFree(Some(item as _)) };
