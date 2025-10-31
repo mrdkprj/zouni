@@ -596,7 +596,7 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
         let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
         let invoke = CMINVOKECOMMANDINFO {
             cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
-            lpVerb: PCSTR(b"undelete\0".as_ptr()),
+            lpVerb: PCSTR(c"undelete".as_ptr() as _),
             ..Default::default()
         };
 
@@ -629,7 +629,7 @@ pub fn undelete_by_time(targets: &[RecycleBinItem]) -> Result<(), String> {
         let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
         let invoke = CMINVOKECOMMANDINFO {
             cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
-            lpVerb: PCSTR(b"undelete\0".as_ptr()),
+            lpVerb: PCSTR(c"undelete".as_ptr() as _),
             ..Default::default()
         };
 
@@ -662,7 +662,7 @@ pub fn delete_from_recycle_bin(targets: &[RecycleBinItem]) -> Result<(), String>
         let menu: IContextMenu = unsafe { recycle_bin.GetUIObjectOf(HWND::default(), &items, None).map_err(|e| e.message()) }?;
         let invoke = CMINVOKECOMMANDINFO {
             cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
-            lpVerb: PCSTR(b"delete\0".as_ptr()),
+            lpVerb: PCSTR(c"delete".as_ptr() as _),
             ..Default::default()
         };
 
