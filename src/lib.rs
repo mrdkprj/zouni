@@ -94,3 +94,9 @@ pub struct RecycleBinItem {
     pub original_path: String,
     pub deleted_time_ms: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Size {
+    pub width: u32,
+    pub height: u32,
+}

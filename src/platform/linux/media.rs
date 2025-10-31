@@ -1,3 +1,4 @@
+use crate::Size;
 use ffmpeg_next::{
     format::{input, Pixel},
     media::Type,
@@ -7,25 +8,24 @@ use ffmpeg_next::{
 use image::RgbImage;
 use std::{collections::HashMap, path::Path};
 
-pub fn extract_video_thumbnail<P: AsRef<Path>>(file_path: P) -> Result<Vec<u8>, String> {
+pub fn extract_video_thumbnail<P: AsRef<Path>>(file_path: P, size: Option<Size>) -> Result<Vec<u8>, String> {
     ffmpeg_next::init().map_err(|e| e.to_string())?;
-
-    get_video_thumbnail(file_path).map_err(|e| e.to_string())
+    get_video_thumbnail(file_path, size).map_err(|e| e.to_string())
 }
 
-pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P]) -> Result<HashMap<String, Vec<u8>>, String> {
+pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P], size: Option<Size>) -> Result<HashMap<String, Vec<u8>>, String> {
     ffmpeg_next::init().map_err(|e| e.to_string())?;
 
     let mut result = HashMap::new();
     for file_path in file_paths {
-        let thumbnail = get_video_thumbnail(file_path).map_err(|e| e.to_string())?;
+        let thumbnail = get_video_thumbnail(file_path, size.clone()).map_err(|e| e.to_string())?;
         let _ = result.insert(file_path.as_ref().to_string_lossy().to_string(), thumbnail);
     }
 
     Ok(result)
 }
 
-fn get_video_thumbnail<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, ffmpeg_next::Error> {
+fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, ffmpeg_next::Error> {
     let mut result = Vec::new();
 
     if let Ok(mut ictx) = input(path.as_ref()) {
@@ -34,7 +34,14 @@ fn get_video_thumbnail<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, ffmpeg_next::
         let context_decoder = ffmpeg_next::codec::context::Context::from_parameters(input.parameters())?;
         let mut decoder = context_decoder.decoder().video()?;
 
-        let mut scaler = Context::get(decoder.format(), decoder.width(), decoder.height(), Pixel::RGB24, decoder.width(), decoder.height(), Flags::BILINEAR)?;
+        let (width, height) = if let Some(size) = size {
+            let scale = f64::min(size.width as f64 / decoder.width() as f64, size.height as f64 / decoder.height() as f64);
+            ((decoder.width() as f64 * scale) as u32, (decoder.height() as f64 * scale) as u32)
+        } else {
+            (decoder.width(), decoder.height())
+        };
+
+        let mut scaler = Context::get(decoder.format(), decoder.width(), decoder.height(), Pixel::RGB24, width, height, Flags::BILINEAR)?;
 
         for (stream, packet) in ictx.packets() {
             if stream.index() == stream_index {
