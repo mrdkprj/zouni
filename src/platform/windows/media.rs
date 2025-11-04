@@ -32,8 +32,6 @@ pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P], size: Option<S
 }
 
 unsafe fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> windows::core::Result<Vec<u8>> {
-    let _guard = ComGuard::new();
-
     let wide = encode_wide(path.as_ref());
     let factory: IShellItemImageFactory = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)?;
 
