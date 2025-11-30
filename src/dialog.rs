@@ -9,13 +9,19 @@ pub enum MessageDialogKind {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MessageDialogOptions {
     pub title: Option<String>,
     pub kind: Option<MessageDialogKind>,
     pub buttons: Vec<String>,
     pub message: String,
     pub cancel_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MessageResult {
+    pub button: String,
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,7 +31,7 @@ pub enum OpenProperty {
     MultiSelections,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OpenDialogOptions {
     pub title: Option<String>,
     pub default_path: Option<String>,
@@ -33,14 +39,14 @@ pub struct OpenDialogOptions {
     pub properties: Option<Vec<OpenProperty>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SaveDialogOptions {
     pub title: Option<String>,
     pub default_path: Option<String>,
     pub filters: Option<Vec<FileFilter>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FileFilter {
     pub name: String,
     pub extensions: Vec<String>,
@@ -85,17 +91,32 @@ fn get_level(kind: &Option<MessageDialogKind>) -> MessageLevel {
     }
 }
 
-fn parse_result(cancel_label: String, result: MessageDialogResult) -> bool {
+fn parse_result(cancel_label: String, result: MessageDialogResult) -> MessageResult {
     match result {
-        MessageDialogResult::Ok => true,
-        MessageDialogResult::Cancel => false,
-        MessageDialogResult::Yes => true,
-        MessageDialogResult::No => false,
-        MessageDialogResult::Custom(label) => cancel_label != label,
+        MessageDialogResult::Ok => MessageResult {
+            button: "Ok".to_string(),
+            cancelled: false,
+        },
+        MessageDialogResult::Cancel => MessageResult {
+            button: "Cancel".to_string(),
+            cancelled: true,
+        },
+        MessageDialogResult::Yes => MessageResult {
+            button: "Yes".to_string(),
+            cancelled: false,
+        },
+        MessageDialogResult::No => MessageResult {
+            button: "No".to_string(),
+            cancelled: false,
+        },
+        MessageDialogResult::Custom(label) => MessageResult {
+            button: label.clone(),
+            cancelled: cancel_label == label,
+        },
     }
 }
 
-pub async fn message(options: MessageDialogOptions) -> bool {
+pub async fn message(options: MessageDialogOptions) -> MessageResult {
     let dialog = AsyncMessageDialog::new().set_title(options.title.as_ref().unwrap_or(&String::new())).set_level(get_level(&options.kind)).set_description(&options.message);
 
     let cancel_label = if let Some(cancel_id) = options.cancel_id {

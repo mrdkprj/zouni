@@ -1,6 +1,6 @@
 [package]
 name = "zouni"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 description = "Variety of functions that `std` does not offer or `std` offers but are not satisfiable"
 readme = "README.md"
