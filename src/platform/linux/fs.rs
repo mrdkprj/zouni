@@ -667,7 +667,7 @@ pub fn empty_recycle_bin(root: Option<String>) -> Result<(), String> {
     if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
         while let Some(Ok(info)) = children.next() {
             let mut trash_path = String::from(TRASH_PATH_STR);
-            trash_path.push_str(&info.name().to_str().unwrap());
+            trash_path.push_str(info.name().to_str().unwrap());
             File::for_uri(&trash_path).delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
         }
     }
