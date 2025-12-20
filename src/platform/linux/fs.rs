@@ -1,6 +1,5 @@
 use super::util::init;
 use crate::{Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
-use async_std::channel::Sender;
 use gio::{
     ffi::{G_FILE_MEASURE_APPARENT_SIZE, G_FILE_QUERY_INFO_NONE},
     glib::ObjectExt,
@@ -18,20 +17,20 @@ use gtk::{
     Align, CssProvider, Dialog, DialogFlags, Label, Orientation, ProgressBar, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION,
 };
 use libc::{timespec, utimensat, AT_FDCWD};
-use once_cell::sync::Lazy;
 use serde_json::Value;
+use smol::channel::Sender;
 use std::{
     collections::HashMap,
     ffi::CString,
     path::Path,
     sync::{
         atomic::{AtomicU32, Ordering},
-        Mutex,
+        LazyLock, Mutex,
     },
 };
 
 static UUID: AtomicU32 = AtomicU32::new(0);
-static CANCELLABLES: Lazy<Mutex<HashMap<u32, Cancellable>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static CANCELLABLES: LazyLock<Mutex<HashMap<u32, Cancellable>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
 const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
@@ -225,7 +224,7 @@ fn register_cancellable() -> (u32, Cancellable) {
 
 /// Moves an item
 pub async fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let (sender, receiver) = async_std::channel::bounded(1);
+    let (sender, receiver) = smol::channel::bounded(1);
 
     execute_move(from, to, &Cancellable::new(), sender.clone());
 
@@ -246,7 +245,7 @@ pub async fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> R
     let message = format!("Moving {} items ", &(dir_count + file_count).to_string());
     let (dialog, progress_bar, label) = create_progress_dialog(message, froms.first().unwrap().as_ref().to_str().unwrap(), to.as_ref().to_str().unwrap(), cancel_id);
 
-    let (sender, receiver) = async_std::channel::bounded(1);
+    let (sender, receiver) = smol::channel::bounded(1);
 
     dialog.show_all();
 
@@ -267,7 +266,7 @@ pub async fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> R
 
 /// Copies an item
 pub async fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let (sender, receiver) = async_std::channel::bounded(1);
+    let (sender, receiver) = smol::channel::bounded(1);
 
     execute_copy(from, to, &Cancellable::new(), sender.clone());
 
@@ -288,7 +287,7 @@ pub async fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) ->
     let message = format!("Copying {} items ", &(dir_count + file_count).to_string());
     let (dialog, progress_bar, label) = create_progress_dialog(message, froms.first().unwrap().as_ref().to_str().unwrap(), to.as_ref().to_str().unwrap(), cancel_id);
 
-    let (sender, receiver) = async_std::channel::bounded(1);
+    let (sender, receiver) = smol::channel::bounded(1);
 
     dialog.show_all();
 

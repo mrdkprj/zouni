@@ -1,16 +1,15 @@
-use once_cell::sync::Lazy;
 use rusb::{Context, Device, Interfaces, Registration, UsbContext};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, LazyLock, Mutex,
     },
     time::Duration,
 };
 
-static LISTENER: Lazy<Mutex<Listener>> = Lazy::new(|| Mutex::new(Listener::default()));
-static WATCHING: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+static LISTENER: LazyLock<Mutex<Listener>> = LazyLock::new(|| Mutex::new(Listener::default()));
+static WATCHING: LazyLock<Arc<AtomicBool>> = LazyLock::new(|| Arc::new(AtomicBool::new(false)));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceEvent {

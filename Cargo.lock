@@ -2534,7 +2534,6 @@ dependencies = [
  "image",
  "libc",
  "mime_guess",
- "once_cell",
  "rfd",
  "rusb",
  "serde",

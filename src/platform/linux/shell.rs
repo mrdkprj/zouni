@@ -143,7 +143,7 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
         cancel_id: None,
     };
 
-    async_std::task::spawn(async move {
+    smol::block_on(async move {
         dialog::message(options).await;
     });
 
