@@ -28,6 +28,7 @@ use windows::{
     },
 };
 
+static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
 const SW_SHOWNORMAL: i32 = 1;
 
 /// Opens the file with the default/associated application
@@ -353,8 +354,6 @@ struct InnerThumbButtons {
     callback: Box<dyn Fn(String)>,
     id_map: HashMap<u32, String>,
 }
-
-static BUTTONS_ADDED: OnceLock<bool> = OnceLock::new();
 
 /// Adds a thumbnail toolbar with specified buttons to a taskbar layout of an application window
 pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, buttons: &[ThumbButton], callback: F) -> Result<(), String> {

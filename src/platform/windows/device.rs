@@ -1,5 +1,4 @@
 use super::util::decode_wide;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use windows::{
@@ -14,7 +13,7 @@ use windows::{
     },
 };
 
-static CONFIG: Lazy<Mutex<isize>> = Lazy::new(|| Mutex::new(0));
+static CONFIG: Mutex<isize> = Mutex::new(-1);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceEvent {

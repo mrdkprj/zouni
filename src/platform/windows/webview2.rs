@@ -1,7 +1,9 @@
 use super::util::encode_wide;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+};
 use webview2_com::{
     ExecuteScriptCompletedHandler,
     Microsoft::Web::WebView2::Win32::{ICoreWebView2, ICoreWebView2File, ICoreWebView2WebMessageReceivedEventArgs, ICoreWebView2WebMessageReceivedEventArgs2},
@@ -19,13 +21,13 @@ struct DropHandler {
     callback: Box<dyn Fn(FileDropEvent) + 'static + Send>,
 }
 
-static HANDLERS: Lazy<Mutex<HashMap<isize, DropHandler>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static HANDLERS: LazyLock<Mutex<HashMap<isize, DropHandler>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub fn register_file_drop<F: Fn(FileDropEvent) + 'static + Send>(webview: &ICoreWebView2, target_id: Option<String>, callback: F) -> Result<(), String> {
     let js = if let Some(target) = &target_id {
         format!(
             r#"
-                const __nonstd__drop__handler__ = (e) => {{
+                const __zouni__drop__handler__ = (e) => {{
                     const mached = e.composed ? e.composedPath().some((p) => p.id == "{}") : e.target.id == "{}";
                     if ( mached ) {{
                         e.preventDefault();
@@ -35,23 +37,23 @@ pub fn register_file_drop<F: Fn(FileDropEvent) + 'static + Send>(webview: &ICore
                     }}
                 }}
 
-                document.removeEventListener("drop", __nonstd__drop__handler__);
-                document.addEventListener("drop", __nonstd__drop__handler__);
+                document.removeEventListener("drop", __zouni__drop__handler__);
+                document.addEventListener("drop", __zouni__drop__handler__);
             "#,
             target.clone(),
             target.clone()
         )
     } else {
         r#"
-            const __nonstd__drop__handler__ = (e) => {{
+            const __zouni__drop__handler__ = (e) => {{
                 e.preventDefault();
                 if (e.dataTransfer && e.dataTransfer.files) {{
                     window.chrome.webview.postMessageWithAdditionalObjects("getPathForFiles", e.dataTransfer.files);
                 }}
             }}
 
-            document.removeEventListener("drop", __nonstd__drop__handler__);
-            document.addEventListener("drop", __nonstd__drop__handler__);
+            document.removeEventListener("drop", __zouni__drop__handler__);
+            document.addEventListener("drop", __zouni__drop__handler__);
         "#
         .to_string()
     };

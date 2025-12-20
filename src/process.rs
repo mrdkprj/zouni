@@ -1,4 +1,3 @@
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use shared_child::SharedChild;
 #[cfg(target_os = "windows")]
@@ -7,7 +6,7 @@ use std::{
     collections::HashMap,
     io::Read,
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
@@ -32,7 +31,7 @@ pub struct Output {
     pub stderr: String,
 }
 
-static CHILDREN: Lazy<Mutex<HashMap<String, Arc<SharedChild>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static CHILDREN: LazyLock<Mutex<HashMap<String, Arc<SharedChild>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
     let mut command = Command::new(option.program);
@@ -50,7 +49,7 @@ pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
     let child = SharedChild::spawn(&mut command).unwrap();
     CHILDREN.lock().unwrap().insert(option.cancellation_token, Arc::new(child));
 
-    async_std::task::spawn(async move {
+    smol::spawn(async move {
         let mut children = CHILDREN.lock().unwrap();
         let child = children.get(&token).unwrap();
         match child.wait() {
