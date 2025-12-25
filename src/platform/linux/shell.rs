@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     dialog::{self, MessageDialogOptions},
-    AppInfo, ThumbButton,
+    AppInfo, Size, ThumbButton,
 };
 use gtk::{
     gio::{
@@ -61,10 +61,15 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
     Ok(())
 }
 
-fn resolve_themed_icon(icon_name: &str) -> String {
+fn resolve_themed_icon(icon_name: &str, size: Option<i32>) -> String {
     init();
     let theme = IconTheme::default().unwrap();
-    if let Some(path) = theme.lookup_icon(icon_name, IconSize::Dialog.into(), IconLookupFlags::empty()) {
+    let icon_size = if let Some(size) = size {
+        size
+    } else {
+        IconSize::Dialog.into()
+    };
+    if let Some(path) = theme.lookup_icon(icon_name, icon_size, IconLookupFlags::empty()) {
         return path.filename().unwrap_or_default().to_string_lossy().to_string();
     }
     String::new()
@@ -80,7 +85,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
         let path = app_info.commandline().unwrap_or_default().to_string_lossy().to_string();
         let icon = if let Some(icon) = app_info.icon() {
             if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
-                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str())
+                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str(), None)
             } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
                 file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
             } else {
@@ -98,22 +103,23 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
     apps
 }
 
-/// Extract icon from executable.
-pub fn extract_icon<P: AsRef<Path>>(path_or_name: P) -> Result<String, String> {
+/// Extracts an icon from executable/icon file or an icon stored in a file's associated executable file
+pub fn extract_icon<P: AsRef<Path>>(path_or_name: P, size: Size) -> Result<String, String> {
     init();
 
-    for info in gtk::gio::AppInfo::all() {
-        if path_or_name.as_ref() == info.executable() {
-            if let Some(icon) = info.icon() {
-                let icon_path = if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
-                    resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str())
-                } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
-                    file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
-                } else {
-                    return Err("No icon found".to_string());
-                };
-                return Ok(icon_path);
-            }
+    let content_type = get_mime_type(path_or_name);
+    let size = size.width.max(size.height);
+
+    if let Some(info) = gtk::gio::AppInfo::default_for_type(&content_type, false) {
+        if let Some(icon) = info.icon() {
+            let icon_path = if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
+                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str(), size)
+            } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
+                file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
+            } else {
+                return Err("No icon found".to_string());
+            };
+            return Ok(icon_path);
         }
     }
 
