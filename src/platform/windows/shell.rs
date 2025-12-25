@@ -1,29 +1,33 @@
 use super::util::{decode_wide, encode_wide, ComGuard};
-use crate::{AppInfo, RgbaIcon, ThumbButton};
+use crate::{AppInfo, RgbaIcon, Size, ThumbButton};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
 use windows::{
-    core::{HSTRING, PCWSTR, PWSTR},
+    core::{Interface, HSTRING, PCWSTR, PWSTR},
     Management::Deployment::PackageManager,
     Win32::{
-        Foundation::{GENERIC_READ, HWND, LPARAM, LRESULT, MAX_PATH, PROPERTYKEY, WPARAM},
+        Foundation::{GENERIC_READ, HWND, LPARAM, LRESULT, MAX_PATH, PROPERTYKEY, SIZE, WPARAM},
         Globalization::{GetLocaleInfoEx, LOCALE_SNAME},
         Graphics::{
-            Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC},
-            Imaging::{CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand},
+            Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HPALETTE},
+            Imaging::{
+                CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppPBGRA, IWICBitmapFrameEncode, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapEncoderNoCache,
+                WICBitmapPaletteTypeCustom, WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnDemand,
+            },
         },
-        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_INPROC_SERVER},
+        System::Com::{CoCreateInstance, CoTaskMemFree, StructuredStorage::IPropertyBag2, CLSCTX_INPROC_SERVER, STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET},
         UI::{
             Shell::{
-                DefSubclassProc, ExtractIconExW, ITaskbarList3,
+                DefSubclassProc, IShellItem, IShellItemImageFactory, ITaskbarList3,
                 PropertiesSystem::{IPropertyStore, PSGetNameFromPropertyKey, SHGetPropertyStoreFromParsingName, GPS_DEFAULT},
-                RemoveWindowSubclass, SHAssocEnumHandlers, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW, TaskbarList,
-                ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS, THB_ICON, THB_TOOLTIP, THUMBBUTTON,
+                RemoveWindowSubclass, SHAssocEnumHandlers, SHCreateItemFromParsingName, SHLoadIndirectString, SHOpenFolderAndSelectItems, SHParseDisplayName, SetWindowSubclass, ShellExecuteExW,
+                TaskbarList, ASSOC_FILTER_RECOMMENDED, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, SIIGBF_ICONONLY, THBF_ENABLED, THBF_HIDDEN, THBN_CLICKED, THB_FLAGS,
+                THB_ICON, THB_TOOLTIP, THUMBBUTTON,
             },
-            WindowsAndMessaging::{CreateIconIndirect, DestroyIcon, GetIconInfo, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
+            WindowsAndMessaging::{CreateIconIndirect, HICON, ICONINFO, WM_COMMAND, WM_DESTROY},
         },
     },
 };
@@ -149,29 +153,23 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                         Err(_) => String::new(),
                     };
 
-                    let mut icon_path = PWSTR::null();
+                    let mut raw_icon_path = PWSTR::null();
                     let mut index = 0;
-                    let icon_location = unsafe { handler.GetIconLocation(&mut icon_path, &mut index) };
+                    let icon_location = unsafe { handler.GetIconLocation(&mut raw_icon_path, &mut index) };
 
                     let uwp = if icon_location.is_ok() {
-                        is_uwp(icon_path)
+                        is_uwp(raw_icon_path)
                     } else {
                         false
                     };
-                    let icon = if uwp {
-                        get_icon_path(icon_path)
+                    let icon_path = if uwp {
+                        get_icon_path(raw_icon_path)
                     } else {
-                        String::new()
-                    };
-
-                    let rgba_icon = if icon.is_empty() && icon_location.is_ok() {
-                        to_rgba_bitmap(icon_path, index).unwrap_or_default()
-                    } else {
-                        RgbaIcon::default()
+                        decode_wide(unsafe { raw_icon_path.as_wide() })
                     };
 
                     if uwp {
-                        if let Some(model_id) = extract_app_user_model_id(icon_path) {
+                        if let Some(model_id) = extract_app_user_model_id(raw_icon_path) {
                             let manager = PackageManager::new().unwrap();
                             let pkg = manager.FindPackageByUserSecurityIdPackageFullName(&HSTRING::new(), &HSTRING::from(&model_id)).unwrap();
 
@@ -184,8 +182,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                     apps.push(AppInfo {
                         path,
                         name,
-                        icon,
-                        rgba_icon,
+                        icon_path,
                     });
                 }
             }
@@ -220,103 +217,82 @@ fn get_icon_path(icon_location: PWSTR) -> String {
     decode_wide(&actual_path)
 }
 
-/* Get rgba from icon path */
-fn to_rgba_bitmap(icon_path: PWSTR, icon_index: i32) -> Result<RgbaIcon, String> {
-    let icon_path = decode_wide(unsafe { icon_path.as_wide() });
+/// Extracts an icon from executable/icon file or an icon stored in a file's associated executable file
+pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<RgbaIcon, String> {
+    let _guard = ComGuard::new();
 
-    if let Some(hicon) = extract_hicon(&icon_path, icon_index) {
-        let mut icon_info = ICONINFO::default();
-        unsafe { GetIconInfo(hicon, &mut icon_info).map_err(|e| e.message()) }?;
+    let wide = encode_wide(path.as_ref());
+    let item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None) }.map_err(|e| e.message())?;
+    let image_factory: IShellItemImageFactory = item.cast().map_err(|e| e.message())?;
 
-        // Retrieve bitmap details
-        let mut bitmap = BITMAP::default();
-        if unsafe { GetObjectW(icon_info.hbmColor.into(), std::mem::size_of::<BITMAP>() as i32, Some(&mut bitmap as *mut _ as *mut _)) } == 0 {
-            return Err("Failed to get bitmap details".to_string());
-        }
+    let (width, height) = (size.width, size.height);
 
-        let width = bitmap.bmWidth as u32;
-        let height = bitmap.bmHeight as u32;
+    let size = SIZE {
+        cx: width as _,
+        cy: height as _,
+    };
 
-        let hdc = unsafe { CreateCompatibleDC(Some(HDC::default())) };
-        if hdc.is_invalid() {
-            return Err("Failed to create compatible DC".to_string());
-        }
+    let hbitmap = unsafe { image_factory.GetImage(size, SIIGBF_ICONONLY) }.map_err(|e| e.message())?;
 
-        let mut bitmap_info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: width as i32,
-                biHeight: -(height as i32), // Negative height for top-down bitmap
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: 0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+    let factory: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }.map_err(|e| e.message())?;
+    let wic_bitmap = unsafe { factory.CreateBitmapFromHBITMAP(hbitmap, HPALETTE(std::ptr::null_mut()), WICBitmapUsePremultipliedAlpha) }.map_err(|e| e.message())?;
+    let mut format = unsafe { wic_bitmap.GetPixelFormat() }.map_err(|e| e.message())?;
+    let converter = unsafe { factory.CreateFormatConverter() }.map_err(|e| e.message())?;
+    unsafe {
+        converter.Initialize(&wic_bitmap, &format, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).map_err(|e| e.message())?;
+    }
 
-        let mut pixel_data: Vec<u8> = vec![0; (width * height * 4) as usize];
+    let stride = width * 4;
+    let buffer_size = stride * height;
+    let mut raw_pixels = vec![0u8; buffer_size as usize];
 
-        // Retrieve the RGBA pixel data
-        unsafe { SelectObject(hdc, icon_info.hbmColor.into()) };
-        if unsafe { GetDIBits(hdc, icon_info.hbmColor, 0, height, Some(pixel_data.as_mut_ptr() as *mut _), &mut bitmap_info, DIB_RGB_COLORS) } == 0 {
-            let _ = unsafe { DeleteDC(hdc) };
-            return Err("Failed to retrieve pixel data".to_string());
-        }
+    unsafe { converter.CopyPixels(std::ptr::null(), stride, &mut raw_pixels) }.map_err(|e| e.message())?;
 
-        let mut alpha = 0u32;
-        for i in (0..(width * height * 4)).step_by(4) {
-            alpha += pixel_data[(i + 3) as usize] as u32;
-        }
+    let _ = unsafe { DeleteObject(hbitmap.into()) };
 
-        // If transparent
-        if alpha == 0 {
-            for y in 0..height {
-                for x in 0..width {
-                    let i = (y * width + x) * 4;
-                    if pixel_data[(i + 3) as usize] == 0 {
-                        // Set fully opaque if alpha was 0
-                        pixel_data[(i + 3) as usize] = 255;
-                    }
-                }
-            }
-        }
+    let pixels = raw_pixels.clone();
+    let bitmap = unsafe { factory.CreateBitmapFromMemory(width, height, &format, width * 4, &pixels) }.map_err(|e| e.message())?;
 
-        let _ = unsafe { DeleteDC(hdc) };
-        let _ = unsafe { DeleteObject(icon_info.hbmColor.into()) };
-        let _ = unsafe { DeleteObject(icon_info.hbmMask.into()) };
-        let _ = unsafe { DestroyIcon(hicon) };
+    let stream = unsafe { factory.CreateStream() }.map_err(|e| e.message())?;
+    unsafe { stream.InitializeFromMemory(&pixels) }.map_err(|e| e.message())?;
 
-        return Ok(RgbaIcon {
-            rgba: pixel_data,
+    let encoder = unsafe { factory.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null()) }.map_err(|e| e.message())?;
+    unsafe { encoder.Initialize(&stream, WICBitmapEncoderNoCache) }.map_err(|e| e.message())?;
+
+    let mut frame: Option<IWICBitmapFrameEncode> = None;
+    let mut bag: Option<IPropertyBag2> = None;
+    unsafe { encoder.CreateNewFrame(&mut frame, &mut bag) }.map_err(|e| e.message())?;
+    if let Some(frame) = frame {
+        unsafe { frame.Initialize(None) }.map_err(|e| e.message())?;
+        unsafe { frame.SetSize(width, height) }.map_err(|e| e.message())?;
+
+        unsafe { frame.SetPixelFormat(&mut format) }.map_err(|e| e.message())?;
+
+        unsafe { frame.WriteSource(&bitmap, std::ptr::null()) }.map_err(|e| e.message())?;
+        unsafe { frame.Commit() }.map_err(|e| e.message())?;
+        unsafe { encoder.Commit() }.map_err(|e| e.message())?;
+
+        let mut stat = STATSTG::default();
+        unsafe { stream.Stat(&mut stat, STATFLAG_NONAME) }.map_err(|e| e.message())?;
+
+        let mut png = vec![0u8; stat.cbSize as usize];
+        unsafe { stream.Seek(0, STREAM_SEEK_SET, None) }.map_err(|e| e.message())?;
+        let _ = unsafe { stream.Read(png.as_mut_ptr() as _, stat.cbSize as _, None) };
+
+        Ok(RgbaIcon {
+            raw_pixels,
+            png,
             width,
             height,
-        });
+        })
+    } else {
+        Ok(RgbaIcon {
+            raw_pixels,
+            png: Vec::new(),
+            width,
+            height,
+        })
     }
-
-    Err("Not found".to_string())
-}
-
-fn extract_hicon(icon_path: &str, icon_index: i32) -> Option<HICON> {
-    if icon_path.is_empty() {
-        return None;
-    }
-
-    let icon_path_w = encode_wide(icon_path);
-    let mut small_icon: [HICON; 1] = [HICON::default()];
-
-    let count = unsafe { ExtractIconExW(PCWSTR(icon_path_w.as_ptr()), icon_index, None, Some(small_icon.as_mut_ptr()), 1) };
-    if count > 0 {
-        return Some(small_icon[0]);
-    }
-
-    None
-}
-
-/// Extract icon from executable or icon.
-pub fn extract_icon<P: AsRef<Path>>(path: P) -> Result<RgbaIcon, String> {
-    let mut icon_path_w = encode_wide(path.as_ref());
-    to_rgba_bitmap(PWSTR::from_raw(icon_path_w.as_mut_ptr()), 0)
 }
 
 /// Shows the file/directory property dialog

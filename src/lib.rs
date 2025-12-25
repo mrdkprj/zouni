@@ -60,15 +60,14 @@ pub struct ClipboardData {
 pub struct AppInfo {
     pub path: String,
     pub name: String,
-    pub icon: String,
-    #[cfg(target_os = "windows")]
-    pub rgba_icon: RgbaIcon,
+    pub icon_path: String,
 }
 
 #[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RgbaIcon {
-    pub rgba: Vec<u8>,
+    pub raw_pixels: Vec<u8>,
+    pub png: Vec<u8>,
     pub width: u32,
     pub height: u32,
 }
