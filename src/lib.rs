@@ -63,13 +63,14 @@ pub struct AppInfo {
     pub icon_path: String,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RgbaIcon {
+pub struct Icon {
+    #[cfg(target_os = "linux")]
+    pub file: String,
+    #[cfg(target_os = "windows")]
     pub raw_pixels: Vec<u8>,
+    #[cfg(target_os = "windows")]
     pub png: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

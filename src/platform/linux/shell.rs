@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     dialog::{self, MessageDialogOptions},
-    AppInfo, Size, ThumbButton,
+    AppInfo, Icon, Size, ThumbButton,
 };
 use gtk::{
     gio::{
@@ -83,7 +83,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
     for app_info in gtk::gio::AppInfo::all_for_type(&content_type) {
         let name = app_info.display_name().to_string();
         let path = app_info.commandline().unwrap_or_default().to_string_lossy().to_string();
-        let icon = if let Some(icon) = app_info.icon() {
+        let icon_path = if let Some(icon) = app_info.icon() {
             if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
                 resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str(), None)
             } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
@@ -97,29 +97,31 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
         apps.push(AppInfo {
             path,
             name,
-            icon,
+            icon_path,
         });
     }
     apps
 }
 
 /// Extracts an icon from executable/icon file or an icon stored in a file's associated executable file
-pub fn extract_icon<P: AsRef<Path>>(path_or_name: P, size: Size) -> Result<String, String> {
+pub fn extract_icon<P: AsRef<Path>>(path_or_name: P, size: Size) -> Result<Icon, String> {
     init();
 
     let content_type = get_mime_type(path_or_name);
-    let size = size.width.max(size.height);
+    let size: i32 = size.width.max(size.height) as _;
 
     if let Some(info) = gtk::gio::AppInfo::default_for_type(&content_type, false) {
         if let Some(icon) = info.icon() {
             let icon_path = if let Some(themed_icon) = icon.downcast_ref::<ThemedIcon>() {
-                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str(), size)
+                resolve_themed_icon(themed_icon.names().first().unwrap_or(&GString::new()).as_str(), Some(size))
             } else if let Some(file_icon) = icon.downcast_ref::<FileIcon>() {
                 file_icon.file().path().unwrap_or_default().to_string_lossy().to_string()
             } else {
                 return Err("No icon found".to_string());
             };
-            return Ok(icon_path);
+            return Ok(Icon {
+                file: icon_path,
+            });
         }
     }
 

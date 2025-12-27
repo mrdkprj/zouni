@@ -1,5 +1,5 @@
 use super::util::{decode_wide, encode_wide, ComGuard};
-use crate::{AppInfo, RgbaIcon, Size, ThumbButton};
+use crate::{AppInfo, Icon, Size, ThumbButton};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -218,7 +218,7 @@ fn get_icon_path(icon_location: PWSTR) -> String {
 }
 
 /// Extracts an icon from executable/icon file or an icon stored in a file's associated executable file
-pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<RgbaIcon, String> {
+pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<Icon, String> {
     let _guard = ComGuard::new();
 
     let wide = encode_wide(path.as_ref());
@@ -279,18 +279,14 @@ pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<RgbaIcon, Str
         unsafe { stream.Seek(0, STREAM_SEEK_SET, None) }.map_err(|e| e.message())?;
         let _ = unsafe { stream.Read(png.as_mut_ptr() as _, stat.cbSize as _, None) };
 
-        Ok(RgbaIcon {
+        Ok(Icon {
             raw_pixels,
             png,
-            width,
-            height,
         })
     } else {
-        Ok(RgbaIcon {
+        Ok(Icon {
             raw_pixels,
             png: Vec::new(),
-            width,
-            height,
         })
     }
 }
