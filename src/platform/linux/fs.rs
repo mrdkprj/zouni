@@ -33,7 +33,8 @@ static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: LazyLock<Mutex<HashMap<u32, Cancellable>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
-const ATTRIBUTES_FOR_DIALOG: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system";
+const ATTRIBUTES_FOR_DIALOG: &str =
+    "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system,standard::icon,standard::content-type";
 const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
 const ATTRIBUTES_FOR_RECYCLE: &str =
     "trash::orig-path,trash::deletion-date,filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";

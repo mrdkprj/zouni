@@ -1,6 +1,6 @@
 [package]
 name = "zouni"
-version = "0.1.20"
+version = "0.1.21"
 edition = "2021"
 description = "Variety of functions that `std` does not offer or `std` offers but are not satisfiable"
 readme = "README.md"
@@ -72,6 +72,8 @@ gio = { version = "0.18", features = ["v2_72"]}
 rusb = "0.9.4"
 libc = "0.2"
 serde_json = "1.0.140"
+bstr = "1"
+zbus = { version = "4.0.0" }
 ffmpeg-next = { version = "7.0.0", optional = true }
 
 [profile.release]

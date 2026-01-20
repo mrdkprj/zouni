@@ -5,8 +5,12 @@ use ffmpeg_next::{
     software::scaling::{context::Context, flag::Flags},
     util::frame::video::Video,
 };
+use gio::{traits::FileExt, Cancellable, FileQueryInfoFlags};
 use image::RgbImage;
 use std::{collections::HashMap, path::Path};
+
+const NORMAL_THUMB_SIZE: u32 = 128;
+const LARGE_THUMB_SIZE: u32 = 256;
 
 pub fn extract_video_thumbnail<P: AsRef<Path>>(file_path: P, size: Option<Size>) -> Result<Vec<u8>, String> {
     ffmpeg_next::init().map_err(|e| e.to_string())?;
@@ -15,8 +19,6 @@ pub fn extract_video_thumbnail<P: AsRef<Path>>(file_path: P, size: Option<Size>)
 }
 
 pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P], size: Option<Size>) -> Result<HashMap<String, Vec<u8>>, String> {
-    ffmpeg_next::init().map_err(|e| e.to_string())?;
-
     let mut result = HashMap::new();
     for file_path in file_paths {
         let thumbnail = get_video_thumbnail(file_path, size.clone()).map_err(|e| e.to_string())?;
@@ -26,7 +28,37 @@ pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P], size: Option<S
     Ok(result)
 }
 
-fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, ffmpeg_next::Error> {
+fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, String> {
+    let thumb_size = if let Some(size) = size.clone() {
+        size.height.max(size.width)
+    } else {
+        0
+    };
+
+    let attributes = if thumb_size == 0 {
+        "thumbnail::path-normal,thumbnail::path-xlarge,thumbnail::path-large"
+    } else if thumb_size <= NORMAL_THUMB_SIZE || thumb_size < LARGE_THUMB_SIZE {
+        "thumbnail::path-normal"
+    } else if thumb_size > LARGE_THUMB_SIZE {
+        "thumbnail::path-xlarge"
+    } else {
+        "thumbnail::path-large"
+    };
+
+    let file = gio::File::for_parse_name(path.as_ref().to_str().unwrap());
+    let info = file.query_info(attributes, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
+    for attribute in attributes.split(",") {
+        if let Some(thumbnail) = info.attribute_byte_string(attribute) {
+            return std::fs::read(thumbnail).map_err(|e| e.to_string());
+        }
+    }
+
+    create_video_thumbnail(path, size).map_err(|e| e.to_string())
+}
+
+fn create_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, ffmpeg_next::Error> {
+    ffmpeg_next::init()?;
+
     let mut result = Vec::new();
 
     if let Ok(mut ictx) = input(path.as_ref()) {
