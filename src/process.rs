@@ -6,7 +6,10 @@ use std::{
     collections::HashMap,
     io::Read,
     process::{Command, Stdio},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        Arc, LazyLock, Mutex,
+    },
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
@@ -15,23 +18,38 @@ use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 pub struct SpawnOption {
     pub program: String,
     pub args: Option<Vec<String>>,
-    pub cancellation_token: String,
+    pub cancellation_token: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CommandStatus {
     pub success: bool,
     pub code: Option<i32>,
+    pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Output {
     pub status: CommandStatus,
     pub stdout: String,
     pub stderr: String,
 }
 
+impl Output {
+    fn error(code: Option<i32>, error: Option<String>) -> Self {
+        Self {
+            status: CommandStatus {
+                success: false,
+                code,
+                error,
+            },
+            ..Default::default()
+        }
+    }
+}
+
 static CHILDREN: LazyLock<Mutex<HashMap<String, Arc<SharedChild>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static UUID: AtomicU16 = AtomicU16::new(0);
 
 pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
     let mut command = Command::new(option.program);
@@ -44,10 +62,16 @@ pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW.0);
 
-    let token = option.cancellation_token.clone();
+    let token = if let Some(token) = option.cancellation_token {
+        token
+    } else {
+        UUID.fetch_add(1, Ordering::Relaxed).to_string()
+    };
 
-    let child = SharedChild::spawn(&mut command).unwrap();
-    CHILDREN.lock().unwrap().insert(option.cancellation_token, Arc::new(child));
+    let child = SharedChild::spawn(&mut command).map_err(|e| Output::error(e.raw_os_error(), Some(e.to_string())))?;
+    {
+        CHILDREN.lock().unwrap().insert(token.clone(), Arc::new(child));
+    }
 
     smol::spawn(async move {
         let mut children = CHILDREN.lock().unwrap();
@@ -56,7 +80,7 @@ pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
             Ok(exit_status) => {
                 let stdout = if let Some(mut out) = child.take_stdout() {
                     let mut buf = String::new();
-                    out.read_to_string(&mut buf).unwrap();
+                    out.read_to_string(&mut buf).map_err(|e| Output::error(e.raw_os_error(), Some(e.to_string())))?;
                     buf
                 } else {
                     String::new()
@@ -64,7 +88,7 @@ pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
 
                 let stderr = if let Some(mut out) = child.take_stderr() {
                     let mut buf = String::new();
-                    out.read_to_string(&mut buf).unwrap();
+                    out.read_to_string(&mut buf).map_err(|e| Output::error(e.raw_os_error(), Some(e.to_string())))?;
                     buf
                 } else {
                     String::new()
@@ -76,6 +100,7 @@ pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
                     status: CommandStatus {
                         success: exit_status.success(),
                         code: exit_status.code(),
+                        error: None,
                     },
                     stderr,
                     stdout,
@@ -91,6 +116,7 @@ pub async fn spawn(option: SpawnOption) -> Result<Output, Output> {
                 status: CommandStatus {
                     success: false,
                     code: e.raw_os_error(),
+                    error: Some(e.to_string()),
                 },
                 stderr: String::new(),
                 stdout: String::new(),
