@@ -33,8 +33,6 @@ static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: LazyLock<Mutex<HashMap<u32, Cancellable>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
-const ATTRIBUTES_FOR_DIALOG: &str =
-    "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,standard::content-type,time::*,dos::is-system,standard::icon,standard::content-type";
 const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
 const ATTRIBUTES_FOR_RECYCLE: &str =
     "trash::orig-path,trash::deletion-date,filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
@@ -158,11 +156,6 @@ pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
     let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
     let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
     Ok(to_file_attribute(&info))
-}
-
-pub(crate) fn stat_inner<P: AsRef<Path>>(file_path: P) -> Result<FileInfo, String> {
-    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-    file.query_info(ATTRIBUTES_FOR_DIALOG, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())
 }
 
 fn to_file_attribute(info: &FileInfo) -> FileAttribute {
@@ -681,7 +674,6 @@ fn create_progress_dialog(message: String, from_item: &str, to_item: &str, cance
 
     // HeaderBar
     let header = gtk::HeaderBar::new();
-    // header.set_decoration_layout(Some("icon:minimize,close"));
     header.set_show_close_button(true);
     let css_provider = CssProvider::new();
     let css = r#"

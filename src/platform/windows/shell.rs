@@ -308,6 +308,7 @@ pub fn open_file_property<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     unsafe { ShellExecuteExW(&mut info).map_err(|e| e.message()) }
 }
 
+/// Opens the default file explorer and reveals a file or folder in its containing folder.
 pub fn show_item_in_folder<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
     let _guard = ComGuard::new();
 
