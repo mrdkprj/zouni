@@ -1,5 +1,5 @@
 use super::util::init;
-use crate::{ClipboardData, Operation};
+use crate::{platform::linux::util::path_to_uri, ClipboardData, Operation};
 use gtk::{gdk::SELECTION_CLIPBOARD, TargetEntry, TargetFlags};
 
 /// Checks if text is available
@@ -70,18 +70,48 @@ pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
 
 /// Writes URIs to clipboard
 ///
-/// `window_handle` is ignored
-pub fn write_uris(_window_handle: isize, paths: &[String], _operation: Operation) -> Result<(), String> {
+/// `window_handle` and `operation` are ignored
+pub fn write_uris(_window_handle: isize, paths: &[String], operation: Operation) -> Result<(), String> {
     init();
 
     let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
 
-    let targets = &[TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP, 0)];
-    let urls = paths.to_vec();
+    let targets: Vec<TargetEntry> =
+        ["text/uri-list", "x-special/gnome-copied-files", "application/x-kde-cutselection"].iter().map(|target| TargetEntry::new(target, TargetFlags::empty(), 0)).collect();
 
-    let _ = clipboard.set_with_data(targets, move |_, selection, _| {
-        let uri_list: Vec<&str> = urls.iter().map(|s| s.as_str()).collect();
-        let _ = selection.set_uris(uri_list.as_slice());
+    let paths_vec = paths.to_vec();
+    let uris = paths_vec.iter().filter_map(|path| path_to_uri(path).ok()).collect::<Vec<_>>();
+    let uris_ref = uris.iter().map(|uri| uri.to_string()).collect::<Vec<_>>();
+    let mut payloads = if operation == Operation::Move {
+        vec!["cut"]
+    } else {
+        vec!["copy"]
+    };
+    for uri in &uris_ref {
+        payloads.push(uri);
+    }
+    let payload = payloads.join("\n");
+
+    let _ = clipboard.set_with_data(&targets, move |_, selection, _| match selection.target().name().as_str() {
+        "x-special/gnome-copied-files" => {
+            println!("1");
+            let _ = selection.set(&selection.target(), 8, payload.as_bytes());
+        }
+        "application/x-kde-cutselection" => {
+            let _ = selection.set(
+                &selection.target(),
+                8,
+                if operation == Operation::Move {
+                    b"1"
+                } else {
+                    b"0"
+                },
+            );
+        }
+        _ => {
+            let uris: Vec<&str> = payload.lines().skip(1).collect();
+            let _ = selection.set_uris(&uris);
+        }
     });
 
     Ok(())

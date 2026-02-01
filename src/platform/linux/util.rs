@@ -43,8 +43,8 @@ fn reveal_with_open_uri_portal(path: PathBuf, connection: &Connection) -> Result
     Ok(())
 }
 
-fn path_to_uri(path: PathBuf) -> Result<Url, String> {
-    let path = path.canonicalize().map_err(|e| e.to_string())?;
+pub(crate) fn path_to_uri<P: AsRef<Path>>(path: P) -> Result<Url, String> {
+    let path = path.as_ref().canonicalize().map_err(|e| e.to_string())?;
     Ok(Url::from_file_path(path).unwrap())
 }
 

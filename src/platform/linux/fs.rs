@@ -1,24 +1,20 @@
-use super::util::init;
-use crate::{Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
-use gio::{
-    ffi::{G_FILE_MEASURE_APPARENT_SIZE, G_FILE_QUERY_INFO_NONE},
-    glib::ObjectExt,
-    FileEnumerator, FileMeasureFlags, IOErrorEnum,
+use crate::{
+    platform::linux::{
+        fs_ext::{execute_file_operation, FileOperation},
+        widgets::{create_replace_confirm_dialog, FileOperationDialog},
+    },
+    Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume,
 };
 use gtk::{
     gio::{
-        ffi::{G_FILE_COPY_ALL_METADATA, G_FILE_COPY_OVERWRITE},
-        prelude::FileExtManual,
         traits::{CancellableExt, FileExt},
-        Cancellable, File, FileCopyFlags, FileInfo, FileQueryInfoFlags, FileType,
+        Cancellable, File, FileCopyFlags, FileEnumerator, FileInfo, FileQueryInfoFlags, FileType,
     },
-    glib::IsA,
-    traits::{BoxExt, CssProviderExt, DialogExt, GtkWindowExt, HeaderBarExt, LabelExt, OrientableExt, ProgressBarExt, StyleContextExt, WidgetExt},
-    Align, CssProvider, Dialog, DialogFlags, Label, Orientation, ProgressBar, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION,
+    glib::ObjectExt,
+    Dialog,
 };
 use libc::{timespec, utimensat, AT_FDCWD};
 use serde_json::Value;
-use smol::channel::Sender;
 use std::{
     collections::HashMap,
     ffi::CString,
@@ -33,10 +29,8 @@ static UUID: AtomicU32 = AtomicU32::new(0);
 static CANCELLABLES: LazyLock<Mutex<HashMap<u32, Cancellable>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
-const ATTRIBUTES_FOR_COPY: &str = "standard::name,standard::type";
 const ATTRIBUTES_FOR_RECYCLE: &str =
     "trash::orig-path,trash::deletion-date,filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
-const IO_CANCEL: &str = "IO_CANCEL";
 
 /// Lists volumes
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
@@ -208,7 +202,7 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String
     Ok(ctype.to_string())
 }
 
-fn register_cancellable() -> (u32, Cancellable) {
+pub(crate) fn register_cancellable() -> (u32, Cancellable) {
     let mut tokens = CANCELLABLES.lock().unwrap();
     let token = Cancellable::new();
     let id = UUID.fetch_add(1, Ordering::Relaxed);
@@ -217,206 +211,46 @@ fn register_cancellable() -> (u32, Cancellable) {
 }
 
 /// Moves an item
-pub async fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let (sender, receiver) = smol::channel::bounded(1);
-
-    execute_move(from, to, &Cancellable::new(), sender.clone());
-
-    if let Ok(result) = receiver.recv().await {
-        result
-    } else {
-        Ok(())
-    }
+pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
+    execute_file_operation(FileOperation::Move, &[from], Some(to))
 }
 
 /// Moves multiple items
-pub async fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
-    let (cancel_id, cancellable) = register_cancellable();
-
-    let (dir_count, file_count) = measure_size(froms);
-    let mut done_count = 0;
-
-    let message = format!("Moving {} items ", &(dir_count + file_count).to_string());
-    let (dialog, progress_bar, label) = create_progress_dialog(message, froms.first().unwrap().as_ref().to_str().unwrap(), to.as_ref().to_str().unwrap(), cancel_id);
-
-    let (sender, receiver) = smol::channel::bounded(1);
-
-    dialog.show_all();
-
-    for from in froms {
-        label.set_text(from.as_ref().to_str().unwrap());
-        execute_move(from, &to, &cancellable, sender.clone());
-        if let Ok(result) = receiver.recv().await {
-            if result.is_err() {
-                return clean_up(result, &dialog, cancel_id);
-            }
-            done_count += 1;
-            update_progress(&dialog, &progress_bar, done_count, file_count);
-        }
-    }
-
-    clean_up(Ok(()), &dialog, cancel_id)
+pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
+    execute_file_operation(FileOperation::Move, froms, Some(to))
 }
 
 /// Copies an item
-pub async fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    let (sender, receiver) = smol::channel::bounded(1);
-
-    execute_copy(from, to, &Cancellable::new(), sender.clone());
-
-    if let Ok(result) = receiver.recv().await {
-        result
-    } else {
-        Ok(())
-    }
+pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
+    execute_file_operation(FileOperation::Copy, &[from], Some(to))
 }
 
 /// Copies multiple items
-pub async fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
-    let (cancel_id, cancellable) = register_cancellable();
-
-    let (dir_count, file_count) = measure_size(froms);
-    let mut done_count = 0;
-
-    let message = format!("Copying {} items ", &(dir_count + file_count).to_string());
-    let (dialog, progress_bar, label) = create_progress_dialog(message, froms.first().unwrap().as_ref().to_str().unwrap(), to.as_ref().to_str().unwrap(), cancel_id);
-
-    let (sender, receiver) = smol::channel::bounded(1);
-
-    dialog.show_all();
-
-    for from in froms {
-        label.set_text(from.as_ref().to_str().unwrap());
-        execute_copy(from, &to, &cancellable, sender.clone());
-        if let Ok(result) = receiver.recv().await {
-            if result.is_err() {
-                return clean_up(result, &dialog, cancel_id);
-            }
-            done_count += 1;
-            update_progress(&dialog, &progress_bar, done_count, file_count);
-        }
-    }
-
-    clean_up(Ok(()), &dialog, cancel_id)
+pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
+    execute_file_operation(FileOperation::Copy, froms, Some(to))
 }
 
-fn measure_size<P1: AsRef<Path>>(entries: &[P1]) -> (u64, u64) {
-    let mut dir_count = 0;
-    let mut file_count = 0;
-    for entry in entries {
-        let (_, num_dirs, num_files) = File::for_path(entry).measure_disk_usage(FileMeasureFlags::from_bits(G_FILE_MEASURE_APPARENT_SIZE).unwrap(), Cancellable::NONE, None).unwrap();
-        dir_count += num_dirs;
-        file_count += num_files;
-    }
-
-    (dir_count, file_count)
+/// Deletes an item
+pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
+    execute_file_operation(FileOperation::Delete, &[file], None::<String>)
 }
 
-fn update_progress(dialog: &Dialog, progress_bar: &ProgressBar, current: u64, total: u64) {
-    let (progress, text) = if current > 0 {
-        let progress = (current as f64 * 1.0) / (total as f64 * 1.0);
-        let percent = progress * 100.0;
-
-        (progress as _, percent.to_string())
-    } else {
-        (1.0, "100%".to_string())
-    };
-
-    dialog.set_title(&format!("{}% complete", text));
-    progress_bar.set_fraction(progress);
+/// Deletes multiple items
+pub fn delete_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
+    execute_file_operation(FileOperation::Delete, files, None::<String>)
 }
 
-fn execute_move<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable: &impl IsA<Cancellable>, sender: Sender<Result<(), String>>) {
-    let source = File::for_parse_name(from.as_ref().to_str().unwrap());
-    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
-    let dest = File::for_parse_name(to_dr.to_str().unwrap());
-
-    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() && handle_result(delete(to_dr), &sender) {
-        return;
-    }
-
-    source.move_async(&dest, FileCopyFlags::from_bits(G_FILE_COPY_ALL_METADATA).unwrap(), gtk::glib::Priority::DEFAULT, Some(cancellable), None, move |result| {
-        handle_result(
-            result.map_err(|e| {
-                if e.matches(IOErrorEnum::Cancelled) {
-                    IO_CANCEL.to_string()
-                } else {
-                    e.message().to_string()
-                }
-            }),
-            &sender,
-        );
-    });
+/// Moves an item to the OS-specific trash location
+pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
+    execute_file_operation(FileOperation::Trash, &[file], None::<String>)
 }
 
-fn execute_copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable: &impl IsA<Cancellable>, sender: Sender<Result<(), String>>) {
-    if from.as_ref().is_dir() {
-        return copy_directory(from, to, cancellable, sender);
-    }
-
-    let source = File::for_parse_name(from.as_ref().to_str().unwrap());
-    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
-    let dest = File::for_parse_name(to_dr.to_str().unwrap());
-
-    if from.as_ref().file_name().unwrap() == to_dr.file_name().unwrap() && to_dr.exists() && handle_result(delete(to_dr), &sender) {
-        return;
-    }
-
-    source.copy_async(&dest, FileCopyFlags::from_bits(G_FILE_COPY_ALL_METADATA).unwrap(), gtk::glib::Priority::DEFAULT, Some(cancellable), None, move |result| {
-        handle_result(
-            result.map_err(|e| {
-                if e.matches(IOErrorEnum::Cancelled) {
-                    IO_CANCEL.to_string()
-                } else {
-                    e.message().to_string()
-                }
-            }),
-            &sender,
-        );
-    });
+/// Moves multiple items to the OS-specific trash location
+pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
+    execute_file_operation(FileOperation::Trash, files, None::<String>)
 }
 
-fn copy_directory<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, cancellable: &impl IsA<Cancellable>, sender: Sender<Result<(), String>>) {
-    let source = File::for_parse_name(from.as_ref().to_str().unwrap());
-    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
-    let dest = File::for_parse_name(to_dr.to_str().unwrap());
-
-    if !dest.query_exists(Cancellable::NONE) {
-        if handle_result(dest.make_directory(Cancellable::NONE).map_err(|e| e.message().to_string()), &sender) {
-            return;
-        }
-
-        let settable_attributes = dest.query_settable_attributes(Cancellable::NONE).unwrap();
-        let attributes_info = settable_attributes.attributes();
-        let attributes = attributes_info.iter().map(|a| a.name()).collect::<Vec<&str>>().join(",");
-        let info = source.query_info(&attributes, FileQueryInfoFlags::from_bits(G_FILE_QUERY_INFO_NONE).unwrap(), Cancellable::NONE).unwrap();
-        dest.set_attributes_from_info(&info, FileQueryInfoFlags::from_bits(G_FILE_QUERY_INFO_NONE).unwrap(), Cancellable::NONE).unwrap();
-    }
-
-    if let Ok(mut children) = source.enumerate_children(ATTRIBUTES_FOR_COPY, FileQueryInfoFlags::from_bits(G_FILE_QUERY_INFO_NONE).unwrap(), Cancellable::NONE) {
-        while let Some(Ok(info)) = children.next() {
-            let from_file = from.as_ref().to_path_buf().join(info.name());
-            if info.file_type() == FileType::Directory {
-                copy_directory(from_file, &to_dr, cancellable, sender.clone());
-            } else {
-                execute_copy(from_file, &to_dr, cancellable, sender.clone());
-            }
-        }
-    }
-}
-
-fn handle_result(result: Result<(), String>, sender: &Sender<Result<(), String>>) -> bool {
-    if result.is_err() {
-        let _ = sender.try_send(result);
-        let _ = sender.close();
-        false
-    } else {
-        let _ = sender.try_send(result);
-        true
-    }
-}
-
-fn clean_up(result: Result<(), String>, dialog: &gtk::Dialog, cancel_id: u32) -> Result<(), String> {
+pub(crate) fn clean_up(dialog: &FileOperationDialog, cancel_id: u32) {
     dialog.close();
 
     if let Ok(mut tokens) = CANCELLABLES.try_lock() {
@@ -424,55 +258,13 @@ fn clean_up(result: Result<(), String>, dialog: &gtk::Dialog, cancel_id: u32) ->
             tokens.remove(&cancel_id);
         }
     }
-
-    match result {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            if e == IO_CANCEL {
-                Ok(())
-            } else {
-                Err(e)
-            }
-        }
-    }
 }
 
-/// Deletes an item
-pub fn delete<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    if file_path.as_ref().is_dir() {
-        let files = readdir(&file_path, false, false)?;
-        for file in files {
-            delete(file.full_path)?;
-        }
+pub(crate) fn try_cancel(dialog: &Dialog) {
+    let cancel_id = unsafe { dialog.data::<u32>("cancel_id").unwrap().as_ref() };
+    if let Some(cancellable) = CANCELLABLES.lock().unwrap().get(cancel_id) {
+        cancellable.cancel();
     }
-
-    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
-    file.delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-
-    Ok(())
-}
-
-/// Deletes multiple items
-pub fn delete_all<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
-    for file_path in file_paths {
-        delete(file_path)?;
-    }
-
-    Ok(())
-}
-
-/// Moves an item to the OS-specific trash location
-pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
-    let file = File::for_parse_name(file.as_ref().to_str().unwrap());
-    file.trash(Cancellable::NONE).map_err(|e| e.message().to_string())
-}
-
-/// Moves multiple items to the OS-specific trash location
-pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-    for file in files {
-        trash(file)?;
-    }
-    Ok(())
 }
 
 pub fn cancel(id: u32) -> bool {
@@ -578,9 +370,7 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
             let mut trash_path = String::from(TRASH_PATH_STR);
             trash_path.push_str(&trash_data.name);
 
-            File::for_uri(&trash_path)
-                .move_(&File::for_parse_name(orig_path), FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Cancellable::NONE, None)
-                .map_err(|e| e.message().to_string())?;
+            File::for_uri(&trash_path).move_(&File::for_parse_name(orig_path), FileCopyFlags::OVERWRITE | FileCopyFlags::ALL_METADATA, Cancellable::NONE, None).map_err(|e| e.message().to_string())?;
         }
     }
 
@@ -599,9 +389,7 @@ pub fn undelete_by_time(targets: &[RecycleBinItem]) -> Result<(), String> {
             let mut trash_path = String::from(TRASH_PATH_STR);
             trash_path.push_str(&trash_data.name);
 
-            File::for_uri(&trash_path)
-                .move_(&File::for_parse_name(orig_path), FileCopyFlags::from_bits(G_FILE_COPY_OVERWRITE | G_FILE_COPY_ALL_METADATA).unwrap(), Cancellable::NONE, None)
-                .map_err(|e| e.message().to_string())?;
+            File::for_uri(&trash_path).move_(&File::for_parse_name(orig_path), FileCopyFlags::OVERWRITE | FileCopyFlags::ALL_METADATA, Cancellable::NONE, None).map_err(|e| e.message().to_string())?;
         }
     }
 
@@ -667,128 +455,6 @@ pub fn empty_recycle_bin(root: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn create_progress_dialog(message: String, from_item: &str, to_item: &str, cancel_id: u32) -> (Dialog, ProgressBar, Label) {
-    init();
-
-    let dialog = Dialog::with_buttons::<gtk::Window>(None, None, DialogFlags::MODAL, &[("Cancel", ResponseType::Cancel), ("Close", ResponseType::Close)]);
-
-    // HeaderBar
-    let header = gtk::HeaderBar::new();
-    header.set_show_close_button(true);
-    let css_provider = CssProvider::new();
-    let css = r#"
-        headerbar entry,
-        headerbar spinbutton,
-        headerbar button,
-        headerbar separator {
-            margin-top: 0px; /* same as headerbar side padding for nicer proportions */
-            margin-bottom: 0px;
-        }
-
-        headerbar {
-            min-height: 0px;
-            padding-left: 2px; /* same as childrens vertical margins for nicer proportions */
-            padding-right: 2px;
-            margin: 0px; /* same as headerbar side padding for nicer proportions */
-            padding: 0px;
-        }
-    "#;
-    css_provider.load_from_data(css.as_bytes()).unwrap();
-    header.style_context().add_provider(&css_provider, STYLE_PROVIDER_PRIORITY_APPLICATION);
-    dialog.set_titlebar(Some(&header));
-    dialog.set_title("0% complete");
-
-    let content_area = dialog.content_area();
-    content_area.set_orientation(Orientation::Vertical);
-    content_area.set_halign(Align::Start);
-    content_area.set_hexpand(false);
-
-    // Message Label
-    let message_label_container = gtk::Box::new(Orientation::Vertical, 5);
-    let label = Label::new(Some(&message));
-    label.set_xalign(0.0);
-    label.set_margin_start(10);
-    message_label_container.pack_start(&label, false, false, 0);
-
-    // From/To Label
-    let progress_label_container = gtk::Box::new(Orientation::Horizontal, 0);
-    let from_label = Label::new(Some("From "));
-    from_label.set_xalign(0.0);
-    let from = Label::new(Some(from_item));
-    from.set_xalign(0.0);
-    from.set_widget_name("entrylabel");
-    from.set_max_width_chars(20);
-    let to_label = Label::new(Some(" to "));
-    to_label.set_xalign(0.0);
-    let to = Label::new(Some(to_item));
-    to.set_xalign(0.0);
-    to.set_widget_name("entrylabel");
-    to.set_max_width_chars(20);
-
-    progress_label_container.pack_start(&from_label, false, false, 0);
-    progress_label_container.pack_start(&from, false, false, 0);
-    progress_label_container.pack_start(&to_label, false, false, 0);
-    progress_label_container.pack_start(&to, false, false, 0);
-    let css_provider = CssProvider::new();
-    let css = r#"
-        label#entrylabel {
-            color:blue;
-        }
-    "#;
-    css_provider.load_from_data(css.as_bytes()).unwrap();
-    from.style_context().add_provider(&css_provider, STYLE_PROVIDER_PRIORITY_APPLICATION);
-    from.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    from.set_tooltip_text(Some(from_item));
-    to.style_context().add_provider(&css_provider, STYLE_PROVIDER_PRIORITY_APPLICATION);
-    to.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    to.set_tooltip_text(Some(to_item));
-    progress_label_container.set_margin_start(10);
-    progress_label_container.set_width_request(100);
-    message_label_container.pack_start(&progress_label_container, false, false, 0);
-    content_area.pack_start(&message_label_container, false, false, 5);
-
-    // ProgressBar
-    let progress_bar = ProgressBar::new();
-    let css_provider = CssProvider::new();
-    let css = r#"
-        progress, trough {
-            min-height: 30px;
-            min-width: 400px;
-        }
-    "#;
-    css_provider.load_from_data(css.as_bytes()).unwrap();
-    progress_bar.style_context().add_provider(&css_provider, STYLE_PROVIDER_PRIORITY_APPLICATION);
-    progress_bar.set_fraction(0.0);
-    content_area.pack_start(&progress_bar, true, true, 10);
-
-    unsafe { dialog.set_data("cancel_id", cancel_id) };
-
-    dialog.connect_destroy(|dialog| {
-        try_cancel(dialog);
-    });
-
-    dialog.connect_close(|dialog| {
-        // The default binding for this signal is the Escape key
-        try_cancel(dialog);
-    });
-
-    dialog.connect_response(|dialog, response| {
-        if response == ResponseType::Cancel || response == ResponseType::Close {
-            try_cancel(dialog);
-            dialog.close();
-        }
-    });
-
-    (dialog, progress_bar, from)
-}
-
-fn try_cancel(dialog: &Dialog) {
-    let cancel_id = unsafe { dialog.data::<u32>("cancel_id").unwrap().as_ref() };
-    if let Some(cancellable) = CANCELLABLES.lock().unwrap().get(cancel_id) {
-        cancellable.cancel();
-    }
-}
-
 /// Changes the modification and access timestamps of a file
 pub fn utimes<P: AsRef<Path>>(file: P, atime_ms: u64, mtime_ms: u64) -> Result<(), String> {
     let path = CString::new(file.as_ref().to_string_lossy().to_string()).map_err(|e| e.to_string())?;
@@ -813,4 +479,10 @@ fn to_timespec(msec: u64) -> timespec {
     }
 
     timespec
+}
+
+pub fn msg() {
+    gtk::glib::spawn_future_local(async move {
+        create_replace_confirm_dialog(0).confirm(&std::path::PathBuf::from("file")).await;
+    });
 }

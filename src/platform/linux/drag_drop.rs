@@ -1,8 +1,11 @@
-use crate::{platform::linux::util::init, Operation};
-use gtk::{prelude::WidgetExt, TargetEntry};
+use crate::{
+    platform::linux::util::{init, path_to_uri},
+    Operation,
+};
+use gtk::{gdk::DragAction, prelude::WidgetExt, TargetEntry, TargetFlags};
 
 /// Starts dragging
-pub fn start_drag(file_paths: Vec<String>, _operation: Operation) -> Result<(), String> {
+pub fn start_drag(file_paths: Vec<String>, operation: Operation) -> Result<(), String> {
     init();
 
     let widgets = gtk::Window::list_toplevels();
@@ -11,21 +14,21 @@ pub fn start_drag(file_paths: Vec<String>, _operation: Operation) -> Result<(), 
     }
     let widget = widgets.first().unwrap();
 
-    let targets = gtk::TargetList::new(&[TargetEntry::new("text/uri-list", gtk::TargetFlags::OTHER_APP, 0)]);
+    let targets = gtk::TargetList::new(&[TargetEntry::new("text/uri-list", TargetFlags::OTHER_APP, 0)]);
 
-    widget.drag_begin_with_coordinates(&targets, gtk::gdk::DragAction::COPY, 1, None, -1, -1);
+    let action = match operation {
+        Operation::Copy => DragAction::COPY,
+        Operation::Move => DragAction::MOVE,
+        Operation::None => DragAction::DEFAULT,
+    };
+    widget.drag_begin_with_coordinates(&targets, action, 1, None, -1, -1);
 
     widget.connect_drag_data_get(move |_, _context, selection_data, info, _time| {
         if info == 0 {
-            let uris = file_paths.iter().map(|path| format!("file://{}", path)).collect::<Vec<_>>();
+            let uris = file_paths.iter().filter_map(|path| path_to_uri(path).ok()).map(|url| url.to_string()).collect::<Vec<_>>();
             let uris_ref: Vec<&str> = uris.iter().map(|uri| uri.as_str()).collect();
-            // Set the URIs as the data
             selection_data.set_uris(&uris_ref);
         }
-    });
-
-    widget.connect_drag_end(move |_widget, _context| {
-        println!("Drag operation ended");
     });
 
     Ok(())

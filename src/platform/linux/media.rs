@@ -1,4 +1,5 @@
 use crate::Size;
+#[cfg(feature = "ffmpeg")]
 use ffmpeg_next::{
     format::{input, Pixel},
     media::Type,
@@ -6,12 +7,11 @@ use ffmpeg_next::{
     util::frame::video::Video,
 };
 use gio::{traits::FileExt, Cancellable, FileQueryInfoFlags};
+#[cfg(feature = "ffmpeg")]
 use image::RgbImage;
 use std::{collections::HashMap, path::Path};
 
 pub fn extract_video_thumbnail<P: AsRef<Path>>(file_path: P, size: Option<Size>) -> Result<Vec<u8>, String> {
-    ffmpeg_next::init().map_err(|e| e.to_string())?;
-
     get_video_thumbnail(file_path, size).map_err(|e| e.to_string())
 }
 
@@ -25,6 +25,7 @@ pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P], size: Option<S
     Ok(result)
 }
 
+#[allow(unused_variables)]
 fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, String> {
     let attributes = "thumbnail::path-normal,thumbnail::path-large,thumbnail::path-xlarge";
     let file = gio::File::for_parse_name(path.as_ref().to_str().unwrap());
@@ -35,9 +36,13 @@ fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Ve
         }
     }
 
-    create_video_thumbnail(path, size).map_err(|e| e.to_string())
+    #[cfg(feature = "ffmpeg")]
+    return create_video_thumbnail(path, size).map_err(|e| e.to_string());
+    #[cfg(not(feature = "ffmpeg"))]
+    return Err("No thumbnails available".to_string());
 }
 
+#[cfg(feature = "ffmpeg")]
 fn create_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, ffmpeg_next::Error> {
     ffmpeg_next::init()?;
 
@@ -86,6 +91,7 @@ fn create_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result
     Ok(result)
 }
 
+#[cfg(feature = "ffmpeg")]
 fn into_buffer(rgb_frame: &Video, rotation: i32) -> Vec<u8> {
     let mut buffer: RgbImage = image::ImageBuffer::new(rgb_frame.width(), rgb_frame.height());
 
@@ -108,6 +114,7 @@ fn into_buffer(rgb_frame: &Video, rotation: i32) -> Vec<u8> {
     bytes
 }
 
+#[cfg(feature = "ffmpeg")]
 fn parse_display_matrix(data: &[u8]) -> i32 {
     let matrix: [i32; 9] = unsafe { std::ptr::read(data.as_ptr() as *const [i32; 9]) };
     // let matrix_f: Vec<f64> = matrix.iter().map(|&v| v as f64 / 65536.0).collect();

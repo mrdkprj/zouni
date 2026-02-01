@@ -43,7 +43,7 @@ pub struct FileAttribute {
     pub link_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Operation {
     None,
     Copy,
