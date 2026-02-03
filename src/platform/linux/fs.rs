@@ -1,7 +1,7 @@
 use crate::{
     platform::linux::{
         fs_ext::{execute_file_operation, FileOperation},
-        widgets::{create_replace_confirm_dialog, FileOperationDialog},
+        widgets::FileOperationDialog,
     },
     Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume,
 };
@@ -479,10 +479,4 @@ fn to_timespec(msec: u64) -> timespec {
     }
 
     timespec
-}
-
-pub fn msg() {
-    gtk::glib::spawn_future_local(async move {
-        create_replace_confirm_dialog(0).confirm(&std::path::PathBuf::from("file")).await;
-    });
 }

@@ -1,6 +1,6 @@
 [package]
 name = "zouni"
-version = "0.1.24"
+version = "0.1.25"
 edition = "2021"
 description = "Variety of functions that `std` does not offer or `std` offers but are not satisfiable"
 readme = "README.md"
@@ -22,7 +22,6 @@ path = "src/lib.rs"
 [features]
 default = []
 "webview2" = ["dep:webview2-com", "dep:serde_json"]
-"ffmpeg" = ["dep:ffmpeg-next"]
 
 [dependencies]
 serde = {version = "1.0.145", features = ["derive"]}
@@ -33,7 +32,6 @@ rfd = { version = "0.15", default-features = false, features = [
   "gtk3",
   "common-controls-v6",
 ] }
-image = "0.25"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61.0", features = [
@@ -65,6 +63,7 @@ windows = { version = "0.61.0", features = [
 windows-core = "0.61.0"
 webview2-com = { version = "0.38", optional = true }
 serde_json = { version = "1.0.140", optional = true }
+image = "0.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.2"
@@ -75,7 +74,6 @@ serde_json = "1.0.140"
 bstr = "1"
 url = "2"
 zbus = { version = "5", features = ["url"] }
-ffmpeg-next = { version = "7.0.0", optional = true }
 
 [profile.release]
 opt-level = "s"
