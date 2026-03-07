@@ -14,8 +14,8 @@ use windows::{
         Graphics::{
             Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HPALETTE},
             Imaging::{
-                CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppPBGRA, IWICBitmapFrameEncode, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapEncoderNoCache,
-                WICBitmapPaletteTypeCustom, WICBitmapUsePremultipliedAlpha, WICDecodeMetadataCacheOnDemand,
+                CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppPBGRA, GUID_WICPixelFormat32bppRGBA, IWICBitmapFrameEncode, IWICImagingFactory, WICBitmapDitherTypeNone,
+                WICBitmapEncoderNoCache, WICBitmapPaletteTypeCustom, WICBitmapUseAlpha, WICDecodeMetadataCacheOnDemand,
             },
         },
         System::Com::{CoCreateInstance, CoTaskMemFree, StructuredStorage::IPropertyBag2, CLSCTX_INPROC_SERVER, STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET},
@@ -130,19 +130,25 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
         let _guard = ComGuard::new();
         let mut extension = String::from(".");
         extension.push_str(extension_name.to_str().unwrap());
+
         let file_extension = encode_wide(extension);
 
         if let Ok(enum_handlers) = unsafe { SHAssocEnumHandlers(PCWSTR::from_raw(file_extension.as_ptr()), ASSOC_FILTER_RECOMMENDED) } {
             loop {
                 let mut handlers = [None; 1];
-                let len = None;
-                let result = unsafe { enum_handlers.Next(&mut handlers, len) };
+                let mut len = 0;
+                let result = unsafe { enum_handlers.Next(&mut handlers, Some(&mut len)) };
 
                 if result.is_err() || handlers[0].is_none() {
                     break;
                 }
 
                 if let Some(handler) = handlers[0].take() {
+                    // Some handler does not work, so skipt it
+                    let presentable = unsafe { handler.GetUIName().is_ok() } || unsafe { handler.GetName().is_ok() };
+                    if !presentable {
+                        continue;
+                    }
                     let mut path = match unsafe { handler.GetName() } {
                         Ok(path_ptr) => decode_wide(unsafe { path_ptr.as_wide() }),
                         Err(_) => String::new(),
@@ -162,6 +168,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
                     } else {
                         false
                     };
+
                     let icon_path = if uwp {
                         get_icon_path(raw_icon_path)
                     } else {
@@ -235,11 +242,11 @@ pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<Icon, String>
     let hbitmap = unsafe { image_factory.GetImage(size, SIIGBF_ICONONLY) }.map_err(|e| e.message())?;
 
     let factory: IWICImagingFactory = unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }.map_err(|e| e.message())?;
-    let wic_bitmap = unsafe { factory.CreateBitmapFromHBITMAP(hbitmap, HPALETTE(std::ptr::null_mut()), WICBitmapUsePremultipliedAlpha) }.map_err(|e| e.message())?;
-    let mut format = unsafe { wic_bitmap.GetPixelFormat() }.map_err(|e| e.message())?;
+    let wic_bitmap = unsafe { factory.CreateBitmapFromHBITMAP(hbitmap, HPALETTE(std::ptr::null_mut()), WICBitmapUseAlpha) }.map_err(|e| e.message())?;
     let converter = unsafe { factory.CreateFormatConverter() }.map_err(|e| e.message())?;
+    /* hbitmap is BGRA, possibly with premultiplied alpha. So convert to RGBA */
     unsafe {
-        converter.Initialize(&wic_bitmap, &format, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).map_err(|e| e.message())?;
+        converter.Initialize(&wic_bitmap, &GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).map_err(|e| e.message())?;
     }
 
     let stride = width * 4;
@@ -251,7 +258,7 @@ pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<Icon, String>
     let _ = unsafe { DeleteObject(hbitmap.into()) };
 
     let pixels = raw_pixels.clone();
-    let bitmap = unsafe { factory.CreateBitmapFromMemory(width, height, &format, width * 4, &pixels) }.map_err(|e| e.message())?;
+    let bitmap = unsafe { factory.CreateBitmapFromMemory(width, height, &GUID_WICPixelFormat32bppRGBA, width * 4, &pixels) }.map_err(|e| e.message())?;
 
     let stream = unsafe { factory.CreateStream() }.map_err(|e| e.message())?;
     unsafe { stream.InitializeFromMemory(&pixels) }.map_err(|e| e.message())?;
@@ -265,9 +272,6 @@ pub fn extract_icon<P: AsRef<Path>>(path: P, size: Size) -> Result<Icon, String>
     if let Some(frame) = frame {
         unsafe { frame.Initialize(None) }.map_err(|e| e.message())?;
         unsafe { frame.SetSize(width, height) }.map_err(|e| e.message())?;
-
-        unsafe { frame.SetPixelFormat(&mut format) }.map_err(|e| e.message())?;
-
         unsafe { frame.WriteSource(&bitmap, std::ptr::null()) }.map_err(|e| e.message())?;
         unsafe { frame.Commit() }.map_err(|e| e.message())?;
         unsafe { encoder.Commit() }.map_err(|e| e.message())?;
