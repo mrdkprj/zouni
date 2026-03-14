@@ -1,5 +1,5 @@
 use crate::Size;
-use gio::{traits::FileExt, Cancellable, FileQueryInfoFlags};
+use gtk::gio::{self, traits::FileExt, Cancellable, FileQueryInfoFlags};
 use std::{collections::HashMap, path::Path};
 
 pub fn extract_video_thumbnail<P: AsRef<Path>>(file_path: P, size: Option<Size>) -> Result<Vec<u8>, String> {

@@ -7,6 +7,7 @@ use crate::{
 };
 use gtk::{
     gio::{
+        self,
         traits::{CancellableExt, FileExt},
         Cancellable, File, FileCopyFlags, FileEnumerator, FileInfo, FileQueryInfoFlags, FileType,
     },

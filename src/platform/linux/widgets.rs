@@ -2,6 +2,7 @@ use crate::fs::try_cancel;
 use crate::platform::linux::fs_ext::FileOperation;
 use gtk::{
     gdk_pixbuf::{traits::PixbufLoaderExt, InterpType, PixbufLoader},
+    gio,
     glib::{self, clone, ObjectExt},
     prelude::DialogExtManual,
     traits::{BoxExt, ButtonExt, CssProviderExt, DialogExt, GtkWindowExt, HeaderBarExt, LabelExt, OrientableExt, ProgressBarExt, StyleContextExt, ToggleButtonExt, WidgetExt},

@@ -1,6 +1,6 @@
 [package]
 name = "zouni"
-version = "0.1.26"
+version = "0.1.27"
 edition = "2021"
 description = "Variety of functions that `std` does not offer or `std` offers but are not satisfiable"
 readme = "README.md"
@@ -22,6 +22,7 @@ path = "src/lib.rs"
 [features]
 default = []
 "webview2" = ["dep:webview2-com", "dep:serde_json"]
+"webkit2gtk" = ["dep:webkit2gtk"]
 
 [dependencies]
 serde = {version = "1.0.145", features = ["derive"]}
@@ -66,7 +67,7 @@ serde_json = { version = "1.0.140", optional = true }
 image = "0.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = "0.18.2"
+gtk = "0.18"
 gio = { version = "0.18", features = ["v2_72"]}
 rusb = "0.9.4"
 libc = "0.2"
@@ -74,6 +75,7 @@ serde_json = "1.0.140"
 bstr = "1"
 url = "2"
 zbus = { version = "5", features = ["url"] }
+webkit2gtk = { version = "=2.0.1", optional = true }
 
 [profile.release]
 opt-level = "s"

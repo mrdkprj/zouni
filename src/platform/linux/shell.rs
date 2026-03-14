@@ -5,6 +5,7 @@ use crate::{
 };
 use gtk::{
     gio::{
+        self,
         glib::{Cast, GString},
         prelude::{AppInfoExt, FileExt},
         AppInfoCreateFlags, AppLaunchContext, File, FileIcon, ThemedIcon,
