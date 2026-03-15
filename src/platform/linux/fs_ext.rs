@@ -265,9 +265,9 @@ async fn run_with_cancellable<F, T>(
 }
 
 async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>, parent: Option<PathBuf>, needs_confirm: &mut Vec<PathBuf>) {
-    let source = File::for_parse_name(from.to_str().unwrap());
+    let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
-    let dest = File::for_parse_name(dest_path.to_str().unwrap());
+    let dest = File::for_path(&dest_path);
 
     // The native implementation may support moving directories (for instance on moves inside the same filesystem), but the fallback code does not.
     if from.is_dir() {
@@ -284,18 +284,18 @@ async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
 }
 
 async fn execute_move_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>, parent: Option<PathBuf>) {
-    let source = File::for_parse_name(from.to_str().unwrap());
+    let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
-    let dest = File::for_parse_name(dest_path.to_str().unwrap());
+    let dest = File::for_path(&dest_path);
 
     let (output, progress_stream) = source.move_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), parent).await;
 }
 
 async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>, needs_confirm: &mut Vec<PathBuf>) {
-    let source = File::for_parse_name(from.to_str().unwrap());
+    let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
-    let dest = File::for_parse_name(dest_path.to_str().unwrap());
+    let dest = File::for_path(&dest_path);
 
     // Can not handle recursive copies of directories
     if from.is_dir() {
@@ -312,18 +312,18 @@ async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
 }
 
 async fn execute_copy_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>) {
-    let source = File::for_parse_name(from.to_str().unwrap());
+    let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
-    let dest = File::for_parse_name(dest_path.to_str().unwrap());
+    let dest = File::for_path(dest_path);
 
     let (output, progress_stream) = source.copy_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), None).await;
 }
 
 async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable: &Cancellable, sender: &Sender<BatchOpMessage>, needs_confirm: &mut Vec<PathBuf>) {
-    let source = File::for_parse_name(from.to_str().unwrap());
+    let source = File::for_path(&from);
     let to_dr = to.join(from.file_name().unwrap());
-    let dest = File::for_parse_name(to_dr.to_str().unwrap());
+    let dest = File::for_path(&to_dr);
 
     if !dest.query_exists(Cancellable::NONE) {
         match dest.make_directory(Cancellable::NONE) {

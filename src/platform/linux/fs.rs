@@ -102,7 +102,7 @@ pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bo
         return Ok(Vec::new());
     }
 
-    let file = File::for_parse_name(directory.as_ref().to_str().unwrap());
+    let file = File::for_path(directory.as_ref());
 
     let mut entries = Vec::new();
     try_readdir(file, &mut entries, recursive, with_mime_type)?;
@@ -148,7 +148,7 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
 
 /// Gets file/directory attributes
 pub fn stat<P: AsRef<Path>>(file_path: P) -> Result<FileAttribute, String> {
-    let file = File::for_parse_name(file_path.as_ref().to_str().unwrap());
+    let file = File::for_path(file_path.as_ref());
     let info = file.query_info(ATTRIBUTES, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
     Ok(to_file_attribute(&info))
 }

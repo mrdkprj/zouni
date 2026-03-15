@@ -19,7 +19,7 @@ pub fn extract_video_thumbnails<P: AsRef<Path>>(file_paths: &[P], size: Option<S
 #[allow(unused_variables)]
 fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> Result<Vec<u8>, String> {
     let attributes = "thumbnail::path-normal,thumbnail::path-large,thumbnail::path-xlarge";
-    let file = gio::File::for_parse_name(path.as_ref().to_str().unwrap());
+    let file = gio::File::for_path(path.as_ref());
     let info = file.query_info(attributes, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
     for attribute in attributes.split(",") {
         if let Some(thumbnail) = info.attribute_byte_string(attribute) {
