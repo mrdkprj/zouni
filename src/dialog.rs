@@ -76,9 +76,6 @@ impl Default for FileDialogResult {
     }
 }
 
-const CANCEL: &str = "Cancel";
-const NO: &str = "No";
-
 fn get_level(kind: &Option<MessageDialogKind>) -> MessageLevel {
     if let Some(kind) = kind {
         match kind {
@@ -91,24 +88,66 @@ fn get_level(kind: &Option<MessageDialogKind>) -> MessageLevel {
     }
 }
 
-fn parse_result(cancel_label: String, result: MessageDialogResult) -> MessageResult {
+const CANCEL: &str = "Cancel";
+
+#[derive(Debug, Default)]
+struct CustomButtons {
+    ok: Option<String>,
+    cancel: Option<String>,
+    yes: Option<String>,
+    no: Option<String>,
+}
+
+fn parse_result(cancel_label: String, result: MessageDialogResult, buttons: CustomButtons) -> MessageResult {
     match result {
-        MessageDialogResult::Ok => MessageResult {
-            button: "Ok".to_string(),
-            cancelled: false,
-        },
-        MessageDialogResult::Cancel => MessageResult {
-            button: "Cancel".to_string(),
-            cancelled: true,
-        },
-        MessageDialogResult::Yes => MessageResult {
-            button: "Yes".to_string(),
-            cancelled: false,
-        },
-        MessageDialogResult::No => MessageResult {
-            button: "No".to_string(),
-            cancelled: false,
-        },
+        MessageDialogResult::Ok => {
+            let button = if let Some(ok) = buttons.ok {
+                ok
+            } else {
+                "Ok".to_string()
+            };
+            let cancelled = button == cancel_label;
+            MessageResult {
+                button,
+                cancelled,
+            }
+        }
+        MessageDialogResult::Cancel => {
+            let button = if let Some(cancel) = buttons.cancel {
+                cancel
+            } else {
+                "Cancel".to_string()
+            };
+            let cancelled = button == cancel_label;
+            MessageResult {
+                button,
+                cancelled,
+            }
+        }
+        MessageDialogResult::Yes => {
+            let button = if let Some(yes) = buttons.yes {
+                yes
+            } else {
+                "Yes".to_string()
+            };
+            let cancelled = button == cancel_label;
+            MessageResult {
+                button,
+                cancelled,
+            }
+        }
+        MessageDialogResult::No => {
+            let button = if let Some(no) = buttons.no {
+                no
+            } else {
+                "No".to_string()
+            };
+            let cancelled = button == cancel_label;
+            MessageResult {
+                button,
+                cancelled,
+            }
+        }
         MessageDialogResult::Custom(label) => MessageResult {
             button: label.clone(),
             cancelled: cancel_label == label,
@@ -124,36 +163,48 @@ pub async fn message(options: MessageDialogOptions) -> MessageResult {
     } else {
         let mut label = String::new();
         for button in &options.buttons {
-            if button.eq_ignore_ascii_case(CANCEL) {
-                label = button.clone();
-                break;
-            }
-
-            if button.eq_ignore_ascii_case(NO) {
+            if button.to_lowercase() == CANCEL.to_lowercase() {
                 label = button.clone();
                 break;
             }
         }
-
-        if label.is_empty() && options.buttons.len() > 1 {
-            label = options.buttons.last().unwrap().to_string();
-        }
-
         label
     };
 
-    let dialog = if options.buttons.len() == 1 {
-        dialog.set_buttons(MessageButtons::OkCustom(options.buttons.first().unwrap().to_string()))
+    let (dialog, buttons) = if options.buttons.len() == 1 {
+        let buttons = CustomButtons {
+            ok: Some(options.buttons.first().unwrap().to_string()),
+            ..Default::default()
+        };
+        (dialog.set_buttons(MessageButtons::OkCustom(options.buttons.first().unwrap().to_string())), buttons)
     } else if options.buttons.len() == 2 {
-        dialog.set_buttons(MessageButtons::OkCancelCustom(options.buttons.first().unwrap().to_string(), options.buttons.get(1).unwrap().to_string()))
+        let buttons = CustomButtons {
+            ok: Some(options.buttons.first().unwrap().to_string()),
+            cancel: Some(options.buttons.get(1).unwrap().to_string()),
+            ..Default::default()
+        };
+        (dialog.set_buttons(MessageButtons::OkCancelCustom(options.buttons.first().unwrap().to_string(), options.buttons.get(1).unwrap().to_string())), buttons)
     } else if options.buttons.len() == 3 {
-        dialog.set_buttons(MessageButtons::YesNoCancelCustom(options.buttons.first().unwrap().to_string(), options.buttons.get(1).unwrap().to_string(), options.buttons.get(2).unwrap().to_string()))
+        let buttons = CustomButtons {
+            yes: Some(options.buttons.first().unwrap().to_string()),
+            no: Some(options.buttons.get(1).unwrap().to_string()),
+            cancel: Some(options.buttons.get(2).unwrap().to_string()),
+            ..Default::default()
+        };
+        (
+            dialog.set_buttons(MessageButtons::YesNoCancelCustom(
+                options.buttons.first().unwrap().to_string(),
+                options.buttons.get(1).unwrap().to_string(),
+                options.buttons.get(2).unwrap().to_string(),
+            )),
+            buttons,
+        )
     } else {
-        dialog.set_buttons(MessageButtons::Ok)
+        (dialog.set_buttons(MessageButtons::Ok), CustomButtons::default())
     };
 
     let result = dialog.show().await;
-    parse_result(cancel_label, result)
+    parse_result(cancel_label, result, buttons)
 }
 
 pub async fn open(options: OpenDialogOptions) -> FileDialogResult {

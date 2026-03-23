@@ -14,6 +14,7 @@ use smol::{channel::Sender, stream::StreamExt};
 use std::{
     path::{Path, PathBuf},
     pin::Pin,
+    time::Instant,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,52 +54,61 @@ pub(crate) fn execute_file_operation<P1: AsRef<Path>, P2: AsRef<Path>>(operation
     let (pause_tx, pause_rx) = smol::channel::bounded::<bool>(1);
 
     let widget = create_progress_dialog(&operation, "Preparing...", to.to_str().unwrap(), cancel_id, pause_tx);
-    widget.show();
+    let mut shown = false;
 
     gtk::glib::spawn_future_local(async move {
-        let mut usages = usage_rx.recv().await.expect("Calculation failed");
-        loop {
-            if let Ok(result) = rx.recv().await {
-                match result {
-                    BatchOpMessage::Ready => {
-                        widget.progress(0.0);
-                        update_progress(&widget, &operation, &mut usages);
-                    }
-                    BatchOpMessage::Started(file) => {
-                        widget.set_from_name(&file);
-                    }
-                    BatchOpMessage::Progress(proccessed, total) => {
-                        if proccessed < total {
-                            usages.processed_size += (total - proccessed) as u64;
-                        } else {
-                            usages.processed_size += total as u64;
-                        }
-
-                        update_progress(&widget, &operation, &mut usages);
-                    }
-                    BatchOpMessage::Done(result) => {
-                        if result.is_err() {
-                            let _ = smol::spawn(async move {
-                                message(MessageDialogOptions {
-                                    title: None,
-                                    kind: Some(crate::dialog::MessageDialogKind::Error),
-                                    buttons: vec!["OK".to_string()],
-                                    message: result.err().unwrap(),
-                                    cancel_id: None,
-                                })
-                                .await;
-                            });
-                        } else {
-                            usages.processed_count += 1;
+        if let Ok(mut usages) = usage_rx.recv().await {
+            let now = Instant::now();
+            loop {
+                if let Ok(result) = rx.recv().await {
+                    match result {
+                        BatchOpMessage::Ready => {
+                            widget.progress(0.0);
                             update_progress(&widget, &operation, &mut usages);
                         }
-                    }
-                    BatchOpMessage::Finished => {
-                        clean_up(&widget, cancel_id);
-                        break;
+                        BatchOpMessage::Started(file) => {
+                            widget.set_from_name(&file);
+                        }
+                        BatchOpMessage::Progress(proccessed, total) => {
+                            // Show widget after 3 seconds
+                            if !shown && now.elapsed().as_secs() > 3 {
+                                widget.show();
+                                shown = true;
+                            }
+                            if proccessed < total {
+                                usages.processed_size += (total - proccessed) as u64;
+                            } else {
+                                usages.processed_size += total as u64;
+                            }
+
+                            update_progress(&widget, &operation, &mut usages);
+                        }
+                        BatchOpMessage::Done(result) => {
+                            if result.is_err() {
+                                let _ = smol::spawn(async move {
+                                    message(MessageDialogOptions {
+                                        title: None,
+                                        kind: Some(crate::dialog::MessageDialogKind::Error),
+                                        buttons: vec!["OK".to_string()],
+                                        message: result.err().unwrap(),
+                                        cancel_id: None,
+                                    })
+                                    .await;
+                                });
+                            } else {
+                                usages.processed_count += 1;
+                                update_progress(&widget, &operation, &mut usages);
+                            }
+                        }
+                        BatchOpMessage::Finished => {
+                            clean_up(&widget, cancel_id);
+                            break;
+                        }
                     }
                 }
             }
+        } else {
+            clean_up(&widget, cancel_id);
         }
     });
 
