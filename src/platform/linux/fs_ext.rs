@@ -94,7 +94,6 @@ where
                 }
             }
 
-            smol::Timer::after(std::time::Duration::from_secs(3)).await;
             let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
 
             match operation {
@@ -129,7 +128,6 @@ where
                     Response::Skip
                 };
 
-                smol::Timer::after(std::time::Duration::from_secs(3)).await;
                 let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
 
                 if result == Response::Replace {
