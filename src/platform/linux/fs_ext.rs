@@ -1,43 +1,25 @@
 use crate::{
-    dialog::{message, MessageDialogOptions},
-    fs::{clean_up, readdir, register_cancellable},
-    platform::linux::{
-        util::init,
-        widgets::{create_progress_dialog, create_replace_confirm_dialog, FileOperationDialog, ReplaceOrSkip},
-    },
+    fs::{readdir, FileOperation, OperationStatus, Response, Signal, Total},
+    platform::linux::util::init,
 };
 use gtk::{
     gio::{prelude::CancellableExtManual, prelude::FileExtManual, traits::CancellableExt, traits::FileExt, Cancellable, File, FileCopyFlags, FileMeasureFlags, FileQueryInfoFlags, IOErrorEnum},
     glib::Priority,
 };
-use smol::{channel::Sender, stream::StreamExt};
+use smol::{
+    channel::{Receiver, Sender},
+    stream::StreamExt,
+};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     pin::Pin,
-    time::Instant,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum FileOperation {
-    Copy,
-    Move,
-    Delete,
-    Trash,
-}
-
-enum BatchOpMessage {
-    Ready,
-    Started(String),
-    Progress(i64, i64),
-    Done(Result<(), String>),
-    Finished,
-}
-
-pub(crate) fn execute_file_operation<P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>) -> Result<(), String> {
-    if froms.is_empty() {
-        return Ok(());
-    }
-
+pub fn execute_file_operation<F, P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>, mut callback: F) -> Signal
+where
+    F: FnMut(OperationStatus) -> Response + 'static,
+{
     init();
 
     let froms = froms.iter().map(|a| a.as_ref().to_path_buf()).collect::<Vec<_>>();
@@ -47,83 +29,62 @@ pub(crate) fn execute_file_operation<P1: AsRef<Path>, P2: AsRef<Path>>(operation
         PathBuf::new()
     };
 
-    let (cancel_id, cancellable) = register_cancellable();
-
-    let (tx, rx) = smol::channel::unbounded::<BatchOpMessage>();
-    let (usage_tx, usage_rx) = smol::channel::bounded::<DiskUsages>(1);
+    let (tx, rx) = smol::channel::unbounded::<OperationStatus>();
     let (pause_tx, pause_rx) = smol::channel::bounded::<bool>(1);
+    let (confirm_tx, confirm_rx) = smol::channel::bounded::<Response>(1);
+    let (cancel_tx, cancel_rx) = smol::channel::bounded::<bool>(1);
 
-    let widget = create_progress_dialog(&operation, "Preparing...", to.to_str().unwrap(), cancel_id, pause_tx);
-    let mut shown = false;
+    let cancellable = Cancellable::new();
+    let signal_cancellable = cancellable.clone();
 
     gtk::glib::spawn_future_local(async move {
-        if let Ok(mut usages) = usage_rx.recv().await {
-            let now = Instant::now();
-            loop {
-                if let Ok(result) = rx.recv().await {
-                    match result {
-                        BatchOpMessage::Ready => {
-                            widget.progress(0.0);
-                            update_progress(&widget, &operation, &mut usages);
-                        }
-                        BatchOpMessage::Started(file) => {
-                            widget.set_from_name(&file);
-                        }
-                        BatchOpMessage::Progress(proccessed, total) => {
-                            // Show widget after 3 seconds
-                            if !shown && now.elapsed().as_secs() > 3 {
-                                widget.show();
-                                shown = true;
+        loop {
+            if let Ok(result) = rx.recv().await {
+                match result {
+                    OperationStatus::Confirm(_) => {
+                        let response = callback(result);
+                        match response {
+                            Response::Cancel => {
+                                let _ = cancel_tx.send(true).await;
+                                break;
                             }
-                            if proccessed < total {
-                                usages.processed_size += (total - proccessed) as u64;
-                            } else {
-                                usages.processed_size += total as u64;
+                            Response::Proceed => {
+                                let _ = confirm_tx.send(Response::Replace).await;
                             }
-
-                            update_progress(&widget, &operation, &mut usages);
-                        }
-                        BatchOpMessage::Done(result) => {
-                            if result.is_err() {
-                                let _ = smol::spawn(async move {
-                                    message(MessageDialogOptions {
-                                        title: None,
-                                        kind: Some(crate::dialog::MessageDialogKind::Error),
-                                        buttons: vec!["OK".to_string()],
-                                        message: result.err().unwrap(),
-                                        cancel_id: None,
-                                    })
-                                    .await;
-                                });
-                            } else {
-                                usages.processed_count += 1;
-                                update_progress(&widget, &operation, &mut usages);
+                            _ => {
+                                let _ = confirm_tx.send(response).await;
                             }
                         }
-                        BatchOpMessage::Finished => {
-                            clean_up(&widget, cancel_id);
+                    }
+                    OperationStatus::Finished => {
+                        let _ = callback(result);
+                        break;
+                    }
+                    _ => {
+                        if callback(result) == Response::Cancel {
+                            let _ = cancel_tx.send(true).await;
                             break;
                         }
                     }
                 }
             }
-        } else {
-            clean_up(&widget, cancel_id);
         }
     });
 
     gtk::glib::spawn_future_local(async move {
-        let mut usages = DiskUsages::default();
-        measure_size(&froms, &mut usages).await.expect("Calculation failed");
+        let mut total = Total::default();
 
-        usage_tx.send(usages).await.expect("Calculation failed");
-        tx.send(BatchOpMessage::Ready).await.expect("Cannot start operation");
+        if measure_size(&froms, &mut total).await.is_err() {
+            let _ = tx.send(OperationStatus::Error("Calculation failed".to_string()));
+            return;
+        }
 
-        let mut needs_confirm = Vec::new();
+        tx.send(OperationStatus::Ready(total)).await.expect("Cannot start operation");
+
+        let mut needs_confirm: HashMap<PathBuf, PathBuf> = HashMap::new();
+
         for from in froms {
-            let _ = tx.try_send(BatchOpMessage::Started(from.file_name().unwrap().to_string_lossy().to_string()));
-
-            if cancellable.is_cancelled() {
+            if is_cancelled(&cancellable, &cancel_rx) {
                 break;
             }
 
@@ -132,6 +93,9 @@ pub(crate) fn execute_file_operation<P1: AsRef<Path>, P2: AsRef<Path>>(operation
                     let _ = pause_rx.recv().await;
                 }
             }
+
+            smol::Timer::after(std::time::Duration::from_secs(3)).await;
+            let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
 
             match operation {
                 FileOperation::Copy => execute_copy(from, to.clone(), &cancellable, &tx, &mut needs_confirm).await,
@@ -142,13 +106,8 @@ pub(crate) fn execute_file_operation<P1: AsRef<Path>, P2: AsRef<Path>>(operation
         }
 
         if !needs_confirm.is_empty() {
-            let mut replace_all = false;
-            let dialog = create_replace_confirm_dialog(cancel_id);
-
-            for file in needs_confirm {
-                let _ = tx.try_send(BatchOpMessage::Started(file.file_name().unwrap().to_string_lossy().to_string()));
-
-                if cancellable.is_cancelled() {
+            for (from, to) in needs_confirm.iter() {
+                if is_cancelled(&cancellable, &cancel_rx) {
                     break;
                 }
 
@@ -158,80 +117,70 @@ pub(crate) fn execute_file_operation<P1: AsRef<Path>, P2: AsRef<Path>>(operation
                     }
                 }
 
-                let result = if replace_all {
-                    ReplaceOrSkip::Replace
-                } else {
-                    dialog.confirm(&file).await
-                };
+                let _ = tx.send(OperationStatus::Confirm(from.to_string_lossy().to_string())).await;
 
-                if result == ReplaceOrSkip::SkipAll {
+                if is_cancelled(&cancellable, &cancel_rx) {
                     break;
                 }
 
-                if result == ReplaceOrSkip::ReplaceAll {
-                    replace_all = true;
-                }
+                let result = if let Ok(response) = confirm_rx.recv().await {
+                    response
+                } else {
+                    Response::Skip
+                };
 
-                if result == ReplaceOrSkip::Replace {
+                smol::Timer::after(std::time::Duration::from_secs(3)).await;
+                let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
+
+                if result == Response::Replace {
                     match operation {
-                        FileOperation::Copy => execute_copy_force(file, to.clone(), &cancellable, &tx).await,
-                        FileOperation::Move => execute_move_force(file, to.clone(), &cancellable, &tx, None).await,
+                        FileOperation::Copy => execute_copy_force(from.clone(), to.clone(), &cancellable, &tx).await,
+                        FileOperation::Move => execute_move_force(from.clone(), to.clone(), &cancellable, &tx, None).await,
                         _ => {}
                     }
                 }
             }
         }
 
-        let _ = tx.send(BatchOpMessage::Finished).await;
+        let _ = tx.send(OperationStatus::Finished).await;
     });
 
-    Ok(())
+    Signal {
+        cancellable: signal_cancellable,
+        pause_tx,
+    }
 }
 
-#[derive(Default, Debug)]
-struct DiskUsages {
-    total_size: u64,
-    total_count: u64,
-    processed_count: u64,
-    processed_size: u64,
-    progress: f64,
+fn is_cancelled(cancellable: &Cancellable, cancel_rx: &Receiver<bool>) -> bool {
+    if cancellable.is_cancelled() {
+        true
+    } else if let Ok(_) = cancel_rx.try_recv() {
+        true
+    } else {
+        false
+    }
 }
 
-async fn measure_size(entries: &[PathBuf], usages: &mut DiskUsages) -> Result<(), String> {
+async fn measure_size(entries: &[PathBuf], data: &mut Total) -> Result<(), String> {
     for entry in entries {
         if entry.is_dir() {
             let children = File::for_path(entry).enumerate_children_future("standard:name", FileQueryInfoFlags::NONE, Priority::DEFAULT).await.map_err(|e| e.message().to_string())?;
             let children: Vec<PathBuf> = children.filter_map(|info| info.ok()).map(|info| entry.join(info.name())).collect();
-            Box::pin(measure_size(&children, usages)).await?;
+            Box::pin(measure_size(&children, data)).await?;
         } else {
             let (disk_usage, _, num_files) = File::for_path(entry).measure_disk_usage_future(FileMeasureFlags::APPARENT_SIZE, Priority::DEFAULT).0.await.map_err(|e| e.message().to_string())?;
-            usages.total_size += disk_usage;
-            usages.total_count += num_files;
+            data.total_size += disk_usage;
+            data.total_count += num_files;
         }
     }
     Ok(())
-}
-
-fn update_progress(widget: &FileOperationDialog, operation: &FileOperation, usages: &mut DiskUsages) {
-    let (messag, progress) = match operation {
-        FileOperation::Copy => ("Copying", usages.processed_size as f64 / usages.total_size as f64),
-        FileOperation::Move => ("Moving", usages.processed_size as f64 / usages.total_size as f64),
-        FileOperation::Delete => ("Deleting", usages.processed_count as f64 / usages.total_count as f64),
-        FileOperation::Trash => ("Trashing", usages.processed_count as f64 / usages.total_count as f64),
-    };
-    usages.progress = progress;
-    let percent = usages.progress * 100.0;
-    widget.set_title(&format!("{}% complete", percent.ceil().to_string()));
-    widget.progress(usages.progress);
-
-    widget.set_message(&format!("{messag} {}/{} items ", usages.processed_count.to_string(), usages.total_count.to_string()));
 }
 
 async fn run_with_cancellable<F, T>(
     operation: F,
     progress_stream: Option<Pin<Box<dyn smol::prelude::Stream<Item = (i64, i64)>>>>,
     cancellable: &Cancellable,
-    tx: &Sender<BatchOpMessage>,
+    tx: &Sender<OperationStatus>,
     cleanup_file: Option<File>,
     parent_dir: Option<PathBuf>,
 ) where
@@ -242,7 +191,7 @@ async fn run_with_cancellable<F, T>(
     if let Some(mut progress) = progress_stream {
         gtk::glib::spawn_future_local(async move {
             while let Some((current, total)) = progress.next().await {
-                let _ = progress_tx.try_send(BatchOpMessage::Progress(current, total));
+                let _ = progress_tx.try_send(OperationStatus::Progress(current, total));
             }
         });
     }
@@ -254,7 +203,7 @@ async fn run_with_cancellable<F, T>(
 
     match operation.race(cancellation_signal).await {
         Ok(_) => {
-            let _ = tx.try_send(BatchOpMessage::Done(Ok(())));
+            let _ = tx.try_send(OperationStatus::End);
         }
         Err(e) => {
             // If cancelled, delete destination file that may be halfway
@@ -269,12 +218,12 @@ async fn run_with_cancellable<F, T>(
                 let _ = File::for_path(parent).delete_async(Priority::DEFAULT, Cancellable::NONE, |_| {});
             }
 
-            let _ = tx.try_send(BatchOpMessage::Done(Err(e.message().to_string())));
+            let _ = tx.try_send(OperationStatus::Error(e.message().to_string()));
         }
     }
 }
 
-async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>, parent: Option<PathBuf>, needs_confirm: &mut Vec<PathBuf>) {
+async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, parent: Option<PathBuf>, needs_confirm: &mut HashMap<PathBuf, PathBuf>) {
     let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
     let dest = File::for_path(&dest_path);
@@ -285,7 +234,7 @@ async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
     }
 
     if dest_path.exists() {
-        needs_confirm.push(from);
+        needs_confirm.insert(from, to);
         return;
     }
 
@@ -293,7 +242,7 @@ async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), parent).await;
 }
 
-async fn execute_move_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>, parent: Option<PathBuf>) {
+async fn execute_move_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, parent: Option<PathBuf>) {
     let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
     let dest = File::for_path(&dest_path);
@@ -302,7 +251,7 @@ async fn execute_move_force(from: PathBuf, to: PathBuf, cancellable: &Cancellabl
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), parent).await;
 }
 
-async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>, needs_confirm: &mut Vec<PathBuf>) {
+async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, needs_confirm: &mut HashMap<PathBuf, PathBuf>) {
     let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
     let dest = File::for_path(&dest_path);
@@ -313,7 +262,7 @@ async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
     }
 
     if dest_path.exists() {
-        needs_confirm.push(from);
+        needs_confirm.insert(from, to);
         return;
     }
 
@@ -321,7 +270,7 @@ async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), None).await;
 }
 
-async fn execute_copy_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>) {
+async fn execute_copy_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>) {
     let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
     let dest = File::for_path(dest_path);
@@ -330,7 +279,7 @@ async fn execute_copy_force(from: PathBuf, to: PathBuf, cancellable: &Cancellabl
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), None).await;
 }
 
-async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable: &Cancellable, sender: &Sender<BatchOpMessage>, needs_confirm: &mut Vec<PathBuf>) {
+async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable: &Cancellable, sender: &Sender<OperationStatus>, needs_confirm: &mut HashMap<PathBuf, PathBuf>) {
     let source = File::for_path(&from);
     let to_dr = to.join(from.file_name().unwrap());
     let dest = File::for_path(&to_dr);
@@ -339,7 +288,7 @@ async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable
         match dest.make_directory(Cancellable::NONE) {
             Ok(()) => {}
             Err(e) => {
-                let _ = sender.try_send(BatchOpMessage::Done(Err(e.message().to_string())));
+                let _ = sender.try_send(OperationStatus::Error(e.message().to_string()));
             }
         };
 
@@ -362,7 +311,7 @@ async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable
     }
 }
 
-async fn execute_delete(file_path: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>) {
+async fn execute_delete(file_path: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>) {
     if file_path.is_dir() {
         if let Ok(files) = readdir(&file_path, false, false) {
             for file in files {
@@ -376,7 +325,7 @@ async fn execute_delete(file_path: PathBuf, cancellable: &Cancellable, tx: &Send
     run_with_cancellable(output, None, cancellable, tx, None, None).await;
 }
 
-async fn execute_trash(file_path: PathBuf, cancellable: &Cancellable, tx: &Sender<BatchOpMessage>) {
+async fn execute_trash(file_path: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>) {
     let file = File::for_path(file_path);
     let output = file.trash_future(Priority::DEFAULT);
     run_with_cancellable(output, None, cancellable, tx, None, None).await;

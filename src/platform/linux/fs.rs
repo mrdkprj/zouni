@@ -1,33 +1,13 @@
-use crate::{
-    platform::linux::{
-        fs_ext::{execute_file_operation, FileOperation},
-        widgets::FileOperationDialog,
-    },
-    Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume,
-};
-use gtk::{
-    gio::{
-        self,
-        traits::{CancellableExt, FileExt},
-        Cancellable, File, FileCopyFlags, FileEnumerator, FileInfo, FileQueryInfoFlags, FileType,
-    },
-    glib::ObjectExt,
-    Dialog,
+use crate::{platform::linux::fs_ext::execute_file_operation, Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
+use gtk::gio::{
+    self,
+    traits::{CancellableExt, FileExt},
+    Cancellable, File, FileCopyFlags, FileEnumerator, FileInfo, FileQueryInfoFlags, FileType,
 };
 use libc::{timespec, utimensat, AT_FDCWD};
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    ffi::CString,
-    path::Path,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        LazyLock, Mutex,
-    },
-};
-
-static UUID: AtomicU32 = AtomicU32::new(0);
-static CANCELLABLES: LazyLock<Mutex<HashMap<u32, Cancellable>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+use smol::channel::Sender;
+use std::{collections::HashMap, ffi::CString, path::Path};
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
 const ATTRIBUTES_FOR_RECYCLE: &str =
@@ -203,80 +183,107 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String
     Ok(ctype.to_string())
 }
 
-pub(crate) fn register_cancellable() -> (u32, Cancellable) {
-    let mut tokens = CANCELLABLES.lock().unwrap();
-    let token = Cancellable::new();
-    let id = UUID.fetch_add(1, Ordering::Relaxed);
-    tokens.insert(id, token.clone());
-    (id, token)
+/// Moves an item
+pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
+    File::for_path(from.as_ref())
+        .move_(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
+        .map_err(|e| e.message().to_string())
 }
 
 /// Moves an item
-pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    execute_file_operation(FileOperation::Move, &[from], Some(to))
+pub fn mv_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Move, &[from], Some(to), callback)
 }
 
 /// Moves multiple items
 pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
-    execute_file_operation(FileOperation::Move, froms, Some(to))
+    froms
+        .iter()
+        .map(|from| {
+            File::for_path(from.as_ref())
+                .move_(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
+                .map_err(|e| e.message().to_string())
+        })
+        .collect()
+}
+
+/// Moves multiple items
+pub fn mv_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Move, froms, Some(to), callback)
 }
 
 /// Copies an item
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    execute_file_operation(FileOperation::Copy, &[from], Some(to))
+    File::for_path(from.as_ref())
+        .copy(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
+        .map_err(|e| e.message().to_string())
+}
+
+/// Copies an item
+pub fn copy_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Copy, &[from], Some(to), callback)
 }
 
 /// Copies multiple items
 pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
-    execute_file_operation(FileOperation::Copy, froms, Some(to))
+    froms
+        .iter()
+        .map(|from| {
+            File::for_path(from.as_ref())
+                .copy(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
+                .map_err(|e| e.message().to_string())
+        })
+        .collect()
+}
+
+/// Copies multiple items
+pub fn copy_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Copy, froms, Some(to), callback)
 }
 
 /// Deletes an item
 pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
-    execute_file_operation(FileOperation::Delete, &[file], None::<String>)
+    File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
+}
+
+/// Deletes an item
+pub fn delete_async<P: AsRef<Path>>(file: P, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Delete, &[file], None::<String>, callback)
 }
 
 /// Deletes multiple items
 pub fn delete_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-    execute_file_operation(FileOperation::Delete, files, None::<String>)
+    files.iter().map(|file| File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())).collect()
+}
+
+/// Deletes multiple items
+pub fn delete_all_async<P: AsRef<Path>>(files: &[P], callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Delete, files, None::<String>, callback)
 }
 
 /// Moves an item to the OS-specific trash location
 pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
-    execute_file_operation(FileOperation::Trash, &[file], None::<String>)
+    File::for_path(file).trash(Cancellable::NONE).map_err(|e| e.message().to_string())
+}
+
+/// Moves an item to the OS-specific trash location
+pub fn trash_async<P: AsRef<Path>>(file: P, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Trash, &[file], None::<String>, callback)
 }
 
 /// Moves multiple items to the OS-specific trash location
 pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-    execute_file_operation(FileOperation::Trash, files, None::<String>)
+    files.iter().map(|file| File::for_path(file).trash(Cancellable::NONE).map_err(|e| e.message().to_string())).collect()
 }
 
-pub(crate) fn clean_up(dialog: &FileOperationDialog, cancel_id: u32) {
-    dialog.close();
-
-    if let Ok(mut tokens) = CANCELLABLES.try_lock() {
-        if tokens.get(&cancel_id).is_some() {
-            tokens.remove(&cancel_id);
-        }
-    }
+/// Moves multiple items to the OS-specific trash location
+pub fn trash_all_async<P: AsRef<Path>>(files: &[P], callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(FileOperation::Trash, files, None::<String>, callback)
 }
 
-pub(crate) fn try_cancel(dialog: &Dialog) {
-    let cancel_id = unsafe { dialog.data::<u32>("cancel_id").unwrap().as_ref() };
-    if let Some(cancellable) = CANCELLABLES.lock().unwrap().get(cancel_id) {
-        cancellable.cancel();
-    }
-}
-
-pub fn cancel(id: u32) -> bool {
-    if let Ok(tokens) = CANCELLABLES.try_lock() {
-        if let Some(token) = tokens.get(&id) {
-            token.cancel();
-            return true;
-        }
-    }
-
-    false
+/// Execute file operation
+pub fn operate<P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+    execute_file_operation(operation, froms, to, callback)
 }
 
 struct TrashData {
@@ -480,4 +487,61 @@ fn to_timespec(msec: u64) -> timespec {
     }
 
     timespec
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FileOperation {
+    Copy,
+    Move,
+    Delete,
+    Trash,
+}
+
+#[derive(Debug)]
+pub enum OperationStatus {
+    Ready(Total),
+    Start(String),
+    // proccessed size and total size
+    Progress(i64, i64),
+    End,
+    Error(String),
+    Confirm(String),
+    Finished,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Response {
+    Proceed,
+    Cancel,
+    Replace,
+    Skip,
+}
+
+#[derive(Debug, Default)]
+pub struct Total {
+    pub total_size: u64,
+    pub total_count: u64,
+}
+
+pub struct Signal {
+    pub(crate) cancellable: Cancellable,
+    pub(crate) pause_tx: Sender<bool>,
+}
+
+impl Signal {
+    pub fn cancel(self) {
+        self.cancellable.cancel();
+    }
+
+    pub fn pause(&self) {
+        let _ = self.pause_tx.try_send(true);
+    }
+
+    pub fn resume(&self) {
+        let _ = self.pause_tx.try_send(false);
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.pause_tx.is_closed()
+    }
 }

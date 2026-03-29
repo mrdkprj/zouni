@@ -6,7 +6,5 @@ mod fs_ext;
 pub mod media;
 pub mod shell;
 mod util;
-#[cfg(feature = "webkit2gtk")]
 pub mod webkit;
-mod widgets;
 pub use gtk::*;
