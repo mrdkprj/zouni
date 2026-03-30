@@ -196,7 +196,6 @@ async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
     }
 
     if dest_path.exists() {
-        println!("start confirm");
         let _ = tx.send(OperationStatus::Confirm(from.to_string_lossy().to_string())).await;
         let result = if let Ok(response) = confirm_rx.recv().await {
             response
@@ -204,10 +203,8 @@ async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
             Response::Skip
         };
         if result == Response::Skip {
-            println!("Skipped");
             return;
         }
-        println!("proceed");
     }
 
     let (output, progress_stream) = source.copy_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
