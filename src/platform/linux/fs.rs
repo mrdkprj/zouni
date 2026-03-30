@@ -1,12 +1,7 @@
 use crate::{platform::linux::fs_ext::execute_file_operation, Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
-use gtk::gio::{
-    self,
-    traits::{CancellableExt, FileExt},
-    Cancellable, File, FileCopyFlags, FileEnumerator, FileInfo, FileQueryInfoFlags, FileType,
-};
+use gtk::gio::{self, traits::FileExt, Cancellable, File, FileCopyFlags, FileEnumerator, FileInfo, FileQueryInfoFlags, FileType};
 use libc::{timespec, utimensat, AT_FDCWD};
 use serde_json::Value;
-use smol::channel::Sender;
 use std::{collections::HashMap, ffi::CString, path::Path};
 
 const ATTRIBUTES: &str = "filesystem::readonly,standard::is-hidden,standard::is-symlink,standard::name,standard::size,standard::type,time::*,dos::is-system,standard::symlink-target";
@@ -191,7 +186,7 @@ pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), Stri
 }
 
 /// Moves an item
-pub fn mv_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn mv_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Move, &[from], Some(to), callback)
 }
 
@@ -208,7 +203,7 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<
 }
 
 /// Moves multiple items
-pub fn mv_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn mv_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Move, froms, Some(to), callback)
 }
 
@@ -220,7 +215,7 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
 }
 
 /// Copies an item
-pub fn copy_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn copy_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Copy, &[from], Some(to), callback)
 }
 
@@ -237,7 +232,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Resul
 }
 
 /// Copies multiple items
-pub fn copy_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn copy_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Copy, froms, Some(to), callback)
 }
 
@@ -247,7 +242,7 @@ pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
 }
 
 /// Deletes an item
-pub fn delete_async<P: AsRef<Path>>(file: P, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn delete_async<P: AsRef<Path>>(file: P, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Delete, &[file], None::<String>, callback)
 }
 
@@ -257,7 +252,7 @@ pub fn delete_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
 }
 
 /// Deletes multiple items
-pub fn delete_all_async<P: AsRef<Path>>(files: &[P], callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn delete_all_async<P: AsRef<Path>>(files: &[P], callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Delete, files, None::<String>, callback)
 }
 
@@ -267,7 +262,7 @@ pub fn trash<P: AsRef<Path>>(file: P) -> Result<(), String> {
 }
 
 /// Moves an item to the OS-specific trash location
-pub fn trash_async<P: AsRef<Path>>(file: P, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn trash_async<P: AsRef<Path>>(file: P, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Trash, &[file], None::<String>, callback)
 }
 
@@ -277,13 +272,13 @@ pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
 }
 
 /// Moves multiple items to the OS-specific trash location
-pub fn trash_all_async<P: AsRef<Path>>(files: &[P], callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
+pub fn trash_all_async<P: AsRef<Path>>(files: &[P], callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
     execute_file_operation(FileOperation::Trash, files, None::<String>, callback)
 }
 
 /// Execute file operation
-pub fn operate<P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>, callback: impl FnMut(OperationStatus) -> Response + 'static) -> Signal {
-    execute_file_operation(operation, froms, to, callback)
+pub fn operate<P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>, callback: impl AsyncFnMut(OperationStatus) -> Response + 'static) {
+    super::fs_ext::execute_file_operation(operation, froms, to, callback)
 }
 
 struct TrashData {
@@ -521,27 +516,4 @@ pub enum Response {
 pub struct Total {
     pub total_size: u64,
     pub total_count: u64,
-}
-
-pub struct Signal {
-    pub(crate) cancellable: Cancellable,
-    pub(crate) pause_tx: Sender<bool>,
-}
-
-impl Signal {
-    pub fn cancel(self) {
-        self.cancellable.cancel();
-    }
-
-    pub fn pause(&self) {
-        let _ = self.pause_tx.try_send(true);
-    }
-
-    pub fn resume(&self) {
-        let _ = self.pause_tx.try_send(false);
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.pause_tx.is_closed()
-    }
 }

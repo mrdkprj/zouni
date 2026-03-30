@@ -1,5 +1,5 @@
 use crate::{
-    fs::{readdir, FileOperation, OperationStatus, Response, Signal, Total},
+    fs::{readdir, FileOperation, OperationStatus, Response, Total},
     platform::linux::util::init,
 };
 use gtk::{
@@ -11,14 +11,13 @@ use smol::{
     stream::StreamExt,
 };
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
     pin::Pin,
 };
 
-pub fn execute_file_operation<F, P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>, mut callback: F) -> Signal
+pub(crate) fn execute_file_operation<F, P1: AsRef<Path>, P2: AsRef<Path>>(operation: FileOperation, froms: &[P1], to: Option<P2>, mut callback: F)
 where
-    F: FnMut(OperationStatus) -> Response + 'static,
+    F: AsyncFnMut(OperationStatus) -> Response + 'static,
 {
     init();
 
@@ -30,22 +29,20 @@ where
     };
 
     let (tx, rx) = smol::channel::unbounded::<OperationStatus>();
-    let (pause_tx, pause_rx) = smol::channel::bounded::<bool>(1);
     let (confirm_tx, confirm_rx) = smol::channel::bounded::<Response>(1);
-    let (cancel_tx, cancel_rx) = smol::channel::bounded::<bool>(1);
 
     let cancellable = Cancellable::new();
-    let signal_cancellable = cancellable.clone();
+    let ref_cancellable = cancellable.clone();
 
     gtk::glib::spawn_future_local(async move {
         loop {
             if let Ok(result) = rx.recv().await {
                 match result {
                     OperationStatus::Confirm(_) => {
-                        let response = callback(result);
+                        let response = callback(result).await;
                         match response {
                             Response::Cancel => {
-                                let _ = cancel_tx.send(true).await;
+                                cancellable.cancel();
                                 break;
                             }
                             Response::Proceed => {
@@ -57,12 +54,12 @@ where
                         }
                     }
                     OperationStatus::Finished => {
-                        let _ = callback(result);
+                        let _ = callback(result).await;
                         break;
                     }
                     _ => {
-                        if callback(result) == Response::Cancel {
-                            let _ = cancel_tx.send(true).await;
+                        if callback(result).await == Response::Cancel {
+                            cancellable.cancel();
                             break;
                         }
                     }
@@ -81,82 +78,23 @@ where
 
         tx.send(OperationStatus::Ready(total)).await.expect("Cannot start operation");
 
-        let mut needs_confirm: HashMap<PathBuf, PathBuf> = HashMap::new();
-
         for from in froms {
-            if is_cancelled(&cancellable, &cancel_rx) {
+            if ref_cancellable.is_cancelled() {
                 break;
-            }
-
-            if let Ok(pause) = pause_rx.try_recv() {
-                if pause {
-                    let _ = pause_rx.recv().await;
-                }
             }
 
             let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
 
             match operation {
-                FileOperation::Copy => execute_copy(from, to.clone(), &cancellable, &tx, &mut needs_confirm).await,
-                FileOperation::Move => execute_move(from, to.clone(), &cancellable, &tx, None, &mut needs_confirm).await,
-                FileOperation::Delete => execute_delete(from, &cancellable, &tx).await,
-                FileOperation::Trash => execute_trash(from, &cancellable, &tx).await,
-            }
-        }
-
-        if !needs_confirm.is_empty() {
-            for (from, to) in needs_confirm.iter() {
-                if is_cancelled(&cancellable, &cancel_rx) {
-                    break;
-                }
-
-                if let Ok(pause) = pause_rx.try_recv() {
-                    if pause {
-                        let _ = pause_rx.recv().await;
-                    }
-                }
-
-                let _ = tx.send(OperationStatus::Confirm(from.to_string_lossy().to_string())).await;
-
-                if is_cancelled(&cancellable, &cancel_rx) {
-                    break;
-                }
-
-                let result = if let Ok(response) = confirm_rx.recv().await {
-                    response
-                } else {
-                    Response::Skip
-                };
-
-                let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
-
-                if result == Response::Replace {
-                    match operation {
-                        FileOperation::Copy => execute_copy_force(from.clone(), to.clone(), &cancellable, &tx).await,
-                        FileOperation::Move => execute_move_force(from.clone(), to.clone(), &cancellable, &tx, None).await,
-                        _ => {}
-                    }
-                }
+                FileOperation::Copy => execute_copy(from, to.clone(), &ref_cancellable, &tx, &confirm_rx).await,
+                FileOperation::Move => execute_move(from, to.clone(), &ref_cancellable, &tx, None, &confirm_rx).await,
+                FileOperation::Delete => execute_delete(from, &ref_cancellable, &tx).await,
+                FileOperation::Trash => execute_trash(from, &ref_cancellable, &tx).await,
             }
         }
 
         let _ = tx.send(OperationStatus::Finished).await;
     });
-
-    Signal {
-        cancellable: signal_cancellable,
-        pause_tx,
-    }
-}
-
-fn is_cancelled(cancellable: &Cancellable, cancel_rx: &Receiver<bool>) -> bool {
-    if cancellable.is_cancelled() {
-        true
-    } else if let Ok(_) = cancel_rx.try_recv() {
-        true
-    } else {
-        false
-    }
 }
 
 async fn measure_size(entries: &[PathBuf], data: &mut Total) -> Result<(), String> {
@@ -221,63 +159,62 @@ async fn run_with_cancellable<F, T>(
     }
 }
 
-async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, parent: Option<PathBuf>, needs_confirm: &mut HashMap<PathBuf, PathBuf>) {
+async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, parent: Option<PathBuf>, confirm_rx: &Receiver<Response>) {
     let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
     let dest = File::for_path(&dest_path);
 
     // The native implementation may support moving directories (for instance on moves inside the same filesystem), but the fallback code does not.
     if from.is_dir() {
-        return handle_directory(false, from, to, cancellable, tx, needs_confirm).await;
+        return handle_directory(false, from, to, cancellable, tx, confirm_rx).await;
     }
 
     if dest_path.exists() {
-        needs_confirm.insert(from, to);
-        return;
+        let _ = tx.send(OperationStatus::Confirm(from.to_string_lossy().to_string())).await;
+        let result = if let Ok(response) = confirm_rx.recv().await {
+            response
+        } else {
+            Response::Skip
+        };
+        if result == Response::Skip {
+            return;
+        }
     }
 
     let (output, progress_stream) = source.move_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), parent).await;
 }
 
-async fn execute_move_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, parent: Option<PathBuf>) {
-    let source = File::for_path(&from);
-    let dest_path = to.join(from.file_name().unwrap());
-    let dest = File::for_path(&dest_path);
-
-    let (output, progress_stream) = source.move_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
-    run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), parent).await;
-}
-
-async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, needs_confirm: &mut HashMap<PathBuf, PathBuf>) {
+async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, confirm_rx: &Receiver<Response>) {
     let source = File::for_path(&from);
     let dest_path = to.join(from.file_name().unwrap());
     let dest = File::for_path(&dest_path);
 
     // Can not handle recursive copies of directories
     if from.is_dir() {
-        return handle_directory(true, from, to, cancellable, tx, needs_confirm).await;
+        return handle_directory(true, from, to, cancellable, tx, confirm_rx).await;
     }
 
     if dest_path.exists() {
-        needs_confirm.insert(from, to);
-        return;
+        println!("start confirm");
+        let _ = tx.send(OperationStatus::Confirm(from.to_string_lossy().to_string())).await;
+        let result = if let Ok(response) = confirm_rx.recv().await {
+            response
+        } else {
+            Response::Skip
+        };
+        if result == Response::Skip {
+            println!("Skipped");
+            return;
+        }
+        println!("proceed");
     }
 
     let (output, progress_stream) = source.copy_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
     run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), None).await;
 }
 
-async fn execute_copy_force(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>) {
-    let source = File::for_path(&from);
-    let dest_path = to.join(from.file_name().unwrap());
-    let dest = File::for_path(dest_path);
-
-    let (output, progress_stream) = source.copy_future(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Priority::DEFAULT);
-    run_with_cancellable(output, Some(progress_stream), cancellable, tx, Some(dest), None).await;
-}
-
-async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable: &Cancellable, sender: &Sender<OperationStatus>, needs_confirm: &mut HashMap<PathBuf, PathBuf>) {
+async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable: &Cancellable, sender: &Sender<OperationStatus>, confirm_rx: &Receiver<Response>) {
     let source = File::for_path(&from);
     let to_dr = to.join(from.file_name().unwrap());
     let dest = File::for_path(&to_dr);
@@ -301,9 +238,9 @@ async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable
         while let Some(Ok(info)) = children.next() {
             let from_file = from.to_path_buf().join(info.name());
             if is_copy {
-                Box::pin(execute_copy(from_file, to_dr.clone(), cancellable, sender, needs_confirm)).await;
+                Box::pin(execute_copy(from_file, to_dr.clone(), cancellable, sender, confirm_rx)).await;
             } else {
-                Box::pin(execute_move(from_file, to_dr.clone(), cancellable, sender, Some(from.to_path_buf()), needs_confirm)).await;
+                Box::pin(execute_move(from_file, to_dr.clone(), cancellable, sender, Some(from.to_path_buf()), confirm_rx)).await;
             }
         }
     }
