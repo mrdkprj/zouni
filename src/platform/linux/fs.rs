@@ -238,6 +238,11 @@ pub fn copy_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, ca
 
 /// Deletes an item
 pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
+    if file.as_ref().is_dir() {
+        let dirents = readdir(&file, false, false)?;
+        let files = dirents.iter().map(|ent| ent.full_path.clone()).collect::<Vec<String>>();
+        files.iter().map(|file| delete(&file)).collect::<Result<(), String>>()?;
+    }
     File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
 }
 
@@ -248,7 +253,17 @@ pub fn delete_async<P: AsRef<Path>>(file: P, callback: impl AsyncFnMut(Operation
 
 /// Deletes multiple items
 pub fn delete_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-    files.iter().map(|file| File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())).collect()
+    files
+        .iter()
+        .map(|file| {
+            if file.as_ref().is_dir() {
+                let dirents = readdir(file, false, false)?;
+                let files = dirents.iter().map(|ent| ent.full_path.clone()).collect::<Vec<String>>();
+                return delete_all(&files);
+            }
+            File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
+        })
+        .collect()
 }
 
 /// Deletes multiple items
