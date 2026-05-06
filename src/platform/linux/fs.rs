@@ -178,11 +178,50 @@ fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String
     Ok(ctype.to_string())
 }
 
+fn handle_directory<P1: AsRef<Path>, P2: AsRef<Path>>(is_copy: bool, from: P1, to: P2) -> Result<(), String> {
+    let source = File::for_path(from.as_ref());
+    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest = File::for_path(&to_dr);
+
+    if !dest.query_exists(Cancellable::NONE) {
+        dest.make_directory(Cancellable::NONE).map_err(|e| e.message().to_string())?;
+        let settable_attributes = dest.query_settable_attributes(Cancellable::NONE).unwrap();
+        let attributes_info = settable_attributes.attributes();
+        let attributes = attributes_info.iter().map(|a| a.name()).collect::<Vec<&str>>().join(",");
+        let info = source.query_info(&attributes, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
+        dest.set_attributes_from_info(&info, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
+    }
+
+    if let Ok(children) = source.enumerate_children("standard:name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
+        children
+            .into_iter()
+            .map(|info| {
+                let info = info.map_err(|e| e.message().to_string())?;
+                let from_file = from.as_ref().to_path_buf().join(info.name());
+                println!("here:{:?} vs {:?}", from_file, to_dr);
+                if is_copy {
+                    copy(from_file, to_dr.clone())
+                } else {
+                    mv(from_file, to_dr.clone())
+                }
+            })
+            .collect()
+    } else {
+        Ok(())
+    }
+}
+
 /// Moves an item
 pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    File::for_path(from.as_ref())
-        .move_(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
-        .map_err(|e| e.message().to_string())
+    let source = File::for_path(from.as_ref());
+    let dest_path = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest = File::for_path(&dest_path);
+
+    if from.as_ref().is_dir() {
+        handle_directory(false, from, to)
+    } else {
+        source.move_(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None).map_err(|e| e.message().to_string())
+    }
 }
 
 /// Moves an item
@@ -192,14 +231,7 @@ pub fn mv_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: im
 
 /// Moves multiple items
 pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
-    froms
-        .iter()
-        .map(|from| {
-            File::for_path(from.as_ref())
-                .move_(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
-                .map_err(|e| e.message().to_string())
-        })
-        .collect()
+    froms.iter().map(|from| mv(from, to.as_ref())).collect()
 }
 
 /// Moves multiple items
@@ -209,9 +241,15 @@ pub fn mv_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, call
 
 /// Copies an item
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
-    File::for_path(from.as_ref())
-        .copy(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
-        .map_err(|e| e.message().to_string())
+    let source = File::for_path(from.as_ref());
+    let dest_path = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest = File::for_path(&dest_path);
+
+    if from.as_ref().is_dir() {
+        handle_directory(true, from, to)
+    } else {
+        source.copy(&dest, FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None).map_err(|e| e.message().to_string())
+    }
 }
 
 /// Copies an item
@@ -221,14 +259,7 @@ pub fn copy_async<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2, callback: 
 
 /// Copies multiple items
 pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2) -> Result<(), String> {
-    froms
-        .iter()
-        .map(|from| {
-            File::for_path(from.as_ref())
-                .copy(&File::for_path(to.as_ref()), FileCopyFlags::ALL_METADATA | FileCopyFlags::NOFOLLOW_SYMLINKS | FileCopyFlags::OVERWRITE, Cancellable::NONE, None)
-                .map_err(|e| e.message().to_string())
-        })
-        .collect()
+    froms.iter().map(|from| copy(from, to.as_ref())).collect()
 }
 
 /// Copies multiple items
@@ -238,7 +269,17 @@ pub fn copy_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, ca
 
 /// Deletes an item
 pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
-    File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
+    if file.as_ref().is_dir() {
+        let children = crate::fs::readdir(file.as_ref(), false, false)?;
+        if children.is_empty() {
+            File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
+        } else {
+            children.iter().map(|child| delete(child.full_path.clone())).collect::<Result<(), String>>()?;
+            File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
+        }
+    } else {
+        File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
+    }
 }
 
 /// Deletes an item
@@ -248,7 +289,7 @@ pub fn delete_async<P: AsRef<Path>>(file: P, callback: impl AsyncFnMut(Operation
 
 /// Deletes multiple items
 pub fn delete_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-    files.iter().map(|file| File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())).collect()
+    files.iter().map(|file| delete(file.as_ref())).collect()
 }
 
 /// Deletes multiple items
@@ -268,7 +309,7 @@ pub fn trash_async<P: AsRef<Path>>(file: P, callback: impl AsyncFnMut(OperationS
 
 /// Moves multiple items to the OS-specific trash location
 pub fn trash_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-    files.iter().map(|file| File::for_path(file).trash(Cancellable::NONE).map_err(|e| e.message().to_string())).collect()
+    files.iter().map(|file| trash(file.as_ref())).collect()
 }
 
 /// Moves multiple items to the OS-specific trash location

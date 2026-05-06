@@ -70,7 +70,7 @@ pub fn read_uris(_window_handle: isize) -> Result<ClipboardData, String> {
 
 /// Writes URIs to clipboard
 ///
-/// `window_handle` and `operation` are ignored
+/// `window_handle` is ignored
 pub fn write_uris(_window_handle: isize, paths: &[String], operation: Operation) -> Result<(), String> {
     init();
 
