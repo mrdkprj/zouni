@@ -168,8 +168,7 @@ pub fn get_mime_type<P: AsRef<Path>>(file_path: P) -> String {
     }
 }
 
-#[allow(dead_code)]
-fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
+pub(crate) fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<String, String> {
     if !file_path.as_ref().is_file() {
         return Ok(String::new());
     }
@@ -270,7 +269,6 @@ pub fn copy_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, ca
 /// Deletes an item
 pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
     if file.as_ref().is_dir() {
-<<<<<<< HEAD
         let children = crate::fs::readdir(file.as_ref(), false, false)?;
         if children.is_empty() {
             File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
@@ -281,13 +279,6 @@ pub fn delete<P: AsRef<Path>>(file: P) -> Result<(), String> {
     } else {
         File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
     }
-=======
-        let dirents = readdir(&file, false, false)?;
-        let files = dirents.iter().map(|ent| ent.full_path.clone()).collect::<Vec<String>>();
-        files.iter().map(|file| delete(&file)).collect::<Result<(), String>>()?;
-    }
-    File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
->>>>>>> f0e52bb7040d2f4eba4124432618fd7363e53f2a
 }
 
 /// Deletes an item
@@ -297,21 +288,7 @@ pub fn delete_async<P: AsRef<Path>>(file: P, callback: impl AsyncFnMut(Operation
 
 /// Deletes multiple items
 pub fn delete_all<P: AsRef<Path>>(files: &[P]) -> Result<(), String> {
-<<<<<<< HEAD
     files.iter().map(|file| delete(file.as_ref())).collect()
-=======
-    files
-        .iter()
-        .map(|file| {
-            if file.as_ref().is_dir() {
-                let dirents = readdir(file, false, false)?;
-                let files = dirents.iter().map(|ent| ent.full_path.clone()).collect::<Vec<String>>();
-                return delete_all(&files);
-            }
-            File::for_path(file).delete(Cancellable::NONE).map_err(|e| e.message().to_string())
-        })
-        .collect()
->>>>>>> f0e52bb7040d2f4eba4124432618fd7363e53f2a
 }
 
 /// Deletes multiple items

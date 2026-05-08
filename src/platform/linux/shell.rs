@@ -1,5 +1,6 @@
 use super::{fs::get_mime_type, util::init};
 use crate::{
+    fs::get_mime_type_fallback,
     platform::linux::util::{reveal_with_dbus, show_item_properties},
     AppInfo, Icon, Size, ThumbButton,
 };
@@ -111,7 +112,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
 pub fn extract_icon<P: AsRef<Path>>(path_or_name: P, size: Size) -> Result<Icon, String> {
     init();
 
-    let content_type = get_mime_type(path_or_name);
+    let content_type = get_mime_type_fallback(path_or_name)?;
     let size: i32 = size.width.max(size.height) as _;
 
     if let Some(info) = gtk::gio::AppInfo::default_for_type(&content_type, false) {
