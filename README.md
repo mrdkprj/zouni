@@ -43,3 +43,9 @@ Variety of functions that `std` does not offer or `std` offers but are not satis
 - message
 - open
 - save
+
+## webview2
+- file drag & drop
+
+## webkit2gtk
+- undo/redo
