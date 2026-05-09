@@ -4,6 +4,7 @@ use crate::{
     platform::linux::util::{reveal_with_dbus, show_item_properties},
     AppInfo, Icon, Size, ThumbButton,
 };
+use gio::glib::clone;
 use gtk::{
     gio::{
         self,
@@ -12,7 +13,7 @@ use gtk::{
         AppInfoCreateFlags, AppLaunchContext, File, FileIcon, ThemedIcon,
     },
     prelude::{AppChooserExt, IconThemeExt, WidgetExt},
-    traits::{AppChooserDialogExt, DialogExt, GtkWindowExt},
+    traits::{AppChooserDialogExt, AppChooserWidgetExt, DialogExt, GtkWindowExt},
     AppChooserDialog, DialogFlags, IconLookupFlags, IconSize, IconTheme, ResponseType,
 };
 use std::path::Path;
@@ -40,13 +41,44 @@ pub fn execute_as<P1: AsRef<Path>, P2: AsRef<Path>>(file_path: P1, app_path: P2)
 
 /// Shows the application chooser dialog
 pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
+    use gtk::glib;
+
     init();
+
+    let extension = if let Some(extension) = file_path.as_ref().extension() {
+        Some(extension.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    let content_type = get_mime_type_fallback(file_path.as_ref())?;
     let file = File::for_path(file_path.as_ref().to_str().unwrap());
+
     let dialog = AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
+
+    if let Ok(chooser) = dialog.widget().dynamic_cast::<gtk::AppChooserWidget>() {
+        dialog.add_button("Select As Default", ResponseType::Apply);
+        dialog.set_response_sensitive(ResponseType::Apply, false);
+        chooser.connect_application_selected(clone!(@weak dialog => move |_, _| {
+            dialog.set_response_sensitive(ResponseType::Apply, true);
+        }));
+    }
 
     dialog.connect_response(move |dialog, response_type| {
         if response_type == ResponseType::Ok {
             if let Some(app_info) = dialog.app_info() {
+                let _ = app_info.launch(&[dialog.gfile().unwrap()], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
+            }
+        }
+
+        if response_type == ResponseType::Apply {
+            if let Some(app_info) = dialog.app_info() {
+                // Use content type as fallback
+                if let Some(extension) = &extension {
+                    let _ = app_info.set_as_default_for_extension(extension);
+                } else {
+                    let _ = app_info.set_as_default_for_type(&content_type);
+                }
+
                 let _ = app_info.launch(&[dialog.gfile().unwrap()], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
             }
         }

@@ -33,6 +33,9 @@ pub fn write_text(_window_handle: isize, text: String) -> Result<(), String> {
     let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
     clipboard.set_text(&text);
 
+    // Stores the current clipboard data somewhere so that it will stay around after the application has quit.
+    clipboard.store();
+
     Ok(())
 }
 
@@ -113,6 +116,9 @@ pub fn write_uris(_window_handle: isize, paths: &[String], operation: Operation)
             let _ = selection.set_uris(&uris);
         }
     });
+
+    // Stores the current clipboard data somewhere so that it will stay around after the application has quit.
+    clipboard.store();
 
     Ok(())
 }
