@@ -97,11 +97,10 @@ pub fn write_uris(_window_handle: isize, paths: &[String], operation: Operation)
 
     let _ = clipboard.set_with_data(&targets, move |_, selection, _| match selection.target().name().as_str() {
         "x-special/gnome-copied-files" => {
-            println!("1");
-            let _ = selection.set(&selection.target(), 8, payload.as_bytes());
+            selection.set(&selection.target(), 8, payload.as_bytes());
         }
         "application/x-kde-cutselection" => {
-            let _ = selection.set(
+            selection.set(
                 &selection.target(),
                 8,
                 if operation == Operation::Move {

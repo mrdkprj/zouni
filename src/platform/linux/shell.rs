@@ -45,11 +45,7 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
 
     init();
 
-    let extension = if let Some(extension) = file_path.as_ref().extension() {
-        Some(extension.to_string_lossy().to_string())
-    } else {
-        None
-    };
+    let extension = file_path.as_ref().extension().map(|extension| extension.to_string_lossy().to_string());
     let content_type = get_mime_type_fallback(file_path.as_ref())?;
     let file = File::for_path(file_path.as_ref().to_str().unwrap());
 

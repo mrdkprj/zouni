@@ -25,7 +25,7 @@ pub(crate) fn reveal_with_dbus<P: AsRef<Path>>(path: P) -> Result<(), String> {
 
 pub(crate) fn show_item_properties<P: AsRef<Path>>(path: P) -> Result<(), String> {
     let connection = Connection::session().map_err(|e| e.to_string())?;
-    let uri = path_to_uri(path.as_ref().to_path_buf())?;
+    let uri = path_to_uri(path.as_ref())?;
     let proxy = FileManager1Proxy::new(&connection).map_err(|e| e.to_string())?;
     proxy.show_item_properties(&[uri], "").map_err(|e| e.to_string())
 }

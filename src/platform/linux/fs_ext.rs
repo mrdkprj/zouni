@@ -72,7 +72,7 @@ where
         let mut total = Total::default();
 
         if measure_size(&froms, &mut total).await.is_err() {
-            let _ = tx.send(OperationStatus::Error("Calculation failed".to_string()));
+            let _ = tx.send(OperationStatus::Error("Calculation failed".to_string())).await;
             return;
         }
 
@@ -112,6 +112,7 @@ async fn measure_size(entries: &[PathBuf], data: &mut Total) -> Result<(), Strin
     Ok(())
 }
 
+#[allow(clippy::type_complexity)]
 async fn run_with_cancellable<F, T>(
     operation: F,
     progress_stream: Option<Pin<Box<dyn smol::prelude::Stream<Item = (i64, i64)>>>>,
@@ -145,13 +146,13 @@ async fn run_with_cancellable<F, T>(
             // If cancelled, delete destination file that may be halfway
             if e.matches(IOErrorEnum::Cancelled) {
                 if let Some(file) = cleanup_file {
-                    let _ = file.delete_async(Priority::DEFAULT, Cancellable::NONE, |_| {});
+                    file.delete_async(Priority::DEFAULT, Cancellable::NONE, |_| {});
                 }
             }
 
             // If move, delete the remaining empty source directory
             if let Some(parent) = parent_dir {
-                let _ = File::for_path(parent).delete_async(Priority::DEFAULT, Cancellable::NONE, |_| {});
+                File::for_path(parent).delete_async(Priority::DEFAULT, Cancellable::NONE, |_| {});
             }
 
             let _ = tx.try_send(OperationStatus::Error(e.message().to_string()));
