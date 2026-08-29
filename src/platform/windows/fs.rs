@@ -6,13 +6,14 @@ use crate::{Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
 use std::{collections::HashMap, path::Path};
 use windows::{
     core::{Interface, PCSTR, PCWSTR},
+    Wdk::Storage::FileSystem::{FileDirectoryInformation, NtQueryDirectoryFile, FILE_DIRECTORY_INFORMATION},
     Win32::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
         Storage::FileSystem::{
             CreateFileW, FindClose, FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindFirstVolumeW, FindNextFileW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW, GetDriveTypeW,
             GetVolumeInformationW, GetVolumePathNamesForVolumeNameW, SetFileTime, FILE_ATTRIBUTE_DEVICE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
-            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
-            FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            FILE_WRITE_ATTRIBUTES, FIND_FIRST_EX_FLAGS, OPEN_EXISTING, WIN32_FIND_DATAW,
         },
         System::{
             Com::{CoCreateInstance, CoTaskMemFree, CreateBindCtx, IPersistFile, CLSCTX_ALL, CLSCTX_INPROC_SERVER, STGM_READ},
@@ -793,4 +794,88 @@ fn to_msecs_from_file_time(low: u32, high: u32) -> u64 {
     let milliseconds = ticks / 10_000;
 
     milliseconds - windows_epoch
+}
+
+/// Get the number of file and folder in a folder
+pub fn get_item_count<P: AsRef<Path>>(dir_path: P) -> Result<(u32, u32), String> {
+    if !dir_path.as_ref().is_dir() {
+        return Ok((0, 0));
+    }
+
+    let mut file_count = 0;
+    let mut dir_count = 0;
+
+    let path_wide = encode_wide(dir_path.as_ref());
+
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR::from_raw(path_wide.as_ptr()),
+            FILE_LIST_DIRECTORY.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS, // Required to open directories
+            None,
+        )
+    }
+    .map_err(|e| e.message())?;
+
+    if handle == windows::Win32::Foundation::INVALID_HANDLE_VALUE {
+        return Err("INVALID_HANDLE_VALUE".to_string());
+    }
+
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut io_status = windows::Win32::System::IO::IO_STATUS_BLOCK::default();
+    let mut restart_scan = true;
+
+    loop {
+        let status = unsafe {
+            NtQueryDirectoryFile(
+                handle,
+                None,
+                None,
+                None,
+                &mut io_status,
+                buffer.as_mut_ptr() as *mut _,
+                buffer.len() as u32,
+                FileDirectoryInformation,
+                false, // Fetch as many entries as fit in the buffer
+                None,
+                restart_scan,
+            )
+        };
+
+        if status != windows::Win32::Foundation::STATUS_SUCCESS {
+            break;
+        }
+
+        // Continue scanning from next iteration
+        restart_scan = false;
+
+        let mut offset = 0;
+        loop {
+            let info = unsafe { &*(buffer.as_ptr().add(offset) as *const FILE_DIRECTORY_INFORMATION) };
+
+            let name_len = (info.FileNameLength / 2) as usize;
+            let name_slice = unsafe { std::slice::from_raw_parts(info.FileName.as_ptr(), name_len) };
+
+            // Filter out "." (0x2E) and ".."
+            if !(name_len == 1 && name_slice[0] == 0x2E) && !(name_len == 2 && name_slice[0] == 0x2E && name_slice[1] == 0x2E) {
+                if info.FileAttributes == FILE_ATTRIBUTE_DIRECTORY.0 {
+                    dir_count += 1;
+                } else {
+                    file_count += 1;
+                }
+            }
+
+            if info.NextEntryOffset == 0 {
+                break;
+            }
+            offset += info.NextEntryOffset as usize;
+        }
+    }
+
+    let _ = unsafe { CloseHandle(handle) };
+
+    Ok((file_count, dir_count))
 }

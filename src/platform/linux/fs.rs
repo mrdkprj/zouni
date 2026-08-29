@@ -554,3 +554,24 @@ pub struct Total {
     pub total_size: u64,
     pub total_count: u64,
 }
+
+/// Get the number of file and folder in a folder
+pub fn get_item_count<P: AsRef<Path>>(dir_path: P) -> Result<(u32, u32), String> {
+    if !dir_path.as_ref().is_dir() {
+        return Ok((0, 0));
+    }
+    let mut file_count = 0;
+    let mut dir_count = 0;
+
+    let dir = File::for_path(dir_path.as_ref());
+
+    for info in dir.enumerate_children("", FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
+        if info.file_type() == FileType::Directory {
+            dir_count += 1;
+        } else {
+            file_count += 1;
+        }
+    }
+
+    Ok((file_count, dir_count))
+}

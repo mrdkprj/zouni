@@ -182,7 +182,7 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
 
                             let ent = pkg.GetAppListEntries().unwrap().GetAt(0).unwrap();
                             let model_id = ent.AppUserModelId().unwrap();
-                            path = format!(r#"shell:AppsFolder\{}"#, &model_id);
+                            path = format!(r#"shell:AppsFolder\{model_id}"#);
                         }
                     }
 

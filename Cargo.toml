@@ -1,6 +1,6 @@
 [package]
 name = "zouni"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Variety of functions that `std` does not offer or `std` offers but are not satisfiable"
 readme = "README.md"
@@ -60,6 +60,8 @@ windows = { version = "0.61.0", features = [
   "Win32_System_Threading",
   "Win32_System_Variant",
   "Win32_Devices_DeviceAndDriverInstallation",
+  "Wdk_Storage_FileSystem",
+  "Win32_System_IO",
 ]}
 windows-core = "0.61.0"
 webview2-com = { version = "0.38", optional = true }
