@@ -48,9 +48,22 @@ unsafe fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> wi
         cy: height as i32,
     };
 
-    // SIIGBF_THUMBNAILONLY: force thumbnail generation
-    // SIIGBF_RESIZETOFIT: fit within requested size
-    let hbitmap = factory.GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_RESIZETOFIT)?;
+    // Try to get cached thumbnail
+    // If not cached or thumbnail size is small, create thumbnail
+    let flags = SIIGBF_THUMBNAILONLY | SIIGBF_RESIZETOFIT;
+    let hbitmap = match factory.GetImage(size, flags | windows::Win32::UI::Shell::SIIGBF_INCACHEONLY) {
+        Ok(hbitmap) => {
+            let mut bmp: BITMAP = std::mem::zeroed();
+            GetObjectW(hbitmap.into(), std::mem::size_of::<BITMAP>() as i32, Some(&mut bmp as *mut _ as _));
+            if bmp.bmWidth >= size.cx || bmp.bmHeight >= size.cy {
+                hbitmap
+            } else {
+                let _ = DeleteObject(hbitmap.into());
+                factory.GetImage(size, flags)?
+            }
+        }
+        Err(_) => factory.GetImage(size, flags)?,
+    };
 
     // Convert HBITMAP → BGRA bytes
     let mut bmp: BITMAP = std::mem::zeroed();
