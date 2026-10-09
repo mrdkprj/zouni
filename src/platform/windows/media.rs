@@ -39,7 +39,7 @@ unsafe fn get_video_thumbnail<P: AsRef<Path>>(path: P, size: Option<Size>) -> wi
         (size.width, size.height)
     } else {
         let props = read_properties(path);
-        (props.get("VideoFrameWidth").unwrap_or(&"100".to_string()).parse().unwrap(), props.get("VideoFrameHeight").unwrap_or(&"100".to_string()).parse().unwrap())
+        (props.get("VideoFrameWidth").unwrap_or(&"100".to_string()).parse().unwrap_or_default(), props.get("VideoFrameHeight").unwrap_or(&"100".to_string()).parse().unwrap_or_default())
     };
 
     // Request image at desired size
@@ -101,7 +101,7 @@ fn into_buffer(data: &[u8], width: u32, height: u32, stride: usize, bits_per_pix
         *pixel = image::Rgb([data[offset + 2], data[offset + 1], data[offset]]);
     }
 
-    buffer.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Jpeg).unwrap();
+    let _ = buffer.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Jpeg);
 
     bytes
 }

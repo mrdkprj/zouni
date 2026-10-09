@@ -505,7 +505,7 @@ pub fn read_recycle_bin() -> Result<Vec<RecycleBinDirent>, String> {
         unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_BSTR).map_err(|e| e.message()) }.unwrap();
         let size_ptr = unsafe { VariantGetStringElem(&variant, 0).map_err(|e| e.message()) }?;
         let size: u64 = if let Ok(size) = unsafe { size_ptr.to_string() } {
-            size.parse().unwrap()
+            size.parse().unwrap_or_default()
         } else {
             0
         };
@@ -575,11 +575,11 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
                 item,
             };
 
-            if map.contains_key(&old_path) {
-                let old = map.get(&old_path).unwrap();
+            if let Some(old) = map.get(&old_path) {
                 if old.deleted_date_ms < deleted_date_ms {
-                    let old = map.insert(old_path, data).unwrap();
-                    unsafe { CoTaskMemFree(Some(old.item as _)) };
+                    if let Some(old) = map.insert(old_path, data) {
+                        unsafe { CoTaskMemFree(Some(old.item as _)) };
+                    }
                 }
             } else {
                 map.insert(old_path, data);
@@ -730,7 +730,7 @@ fn to_time_ms_from_variant(recycle_bin: &IShellFolder2, item: *const ITEMIDLIST,
     let mut src = unsafe { recycle_bin.GetDetailsEx(item, key).map_err(|e| e.message()) }?;
     let mut variant = VARIANT::default();
     unsafe { VariantChangeType(&mut variant, &src, VAR_CHANGE_FLAGS(0), VT_DATE).map_err(|e| e.message()) }?;
-    let file_time = unsafe { VariantToFileTime(&variant, PSTIME_FLAGS(0)) }.unwrap();
+    let file_time = unsafe { VariantToFileTime(&variant, PSTIME_FLAGS(0)) }.map_err(|e| e.message())?;
     let time_ms = to_msecs_from_file_time(file_time.dwLowDateTime, file_time.dwHighDateTime);
     unsafe { VariantClear(&mut variant).map_err(|e| e.message()) }?;
     unsafe { VariantClear(&mut src).map_err(|e| e.message()) }?;

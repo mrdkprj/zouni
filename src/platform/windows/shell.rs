@@ -177,12 +177,17 @@ pub fn get_open_with<P: AsRef<Path>>(file_path: P) -> Vec<AppInfo> {
 
                     if uwp {
                         if let Some(model_id) = extract_app_user_model_id(raw_icon_path) {
-                            let manager = PackageManager::new().unwrap();
-                            let pkg = manager.FindPackageByUserSecurityIdPackageFullName(&HSTRING::new(), &HSTRING::from(&model_id)).unwrap();
-
-                            let ent = pkg.GetAppListEntries().unwrap().GetAt(0).unwrap();
-                            let model_id = ent.AppUserModelId().unwrap();
-                            path = format!(r#"shell:AppsFolder\{model_id}"#);
+                            if let Ok(manager) = PackageManager::new() {
+                                if let Ok(pkg) = manager.FindPackageByUserSecurityIdPackageFullName(&HSTRING::new(), &HSTRING::from(&model_id)) {
+                                    if let Ok(entries) = pkg.GetAppListEntries() {
+                                        if let Ok(entry) = entries.GetAt(0) {
+                                            if let Ok(model_id) = entry.AppUserModelId() {
+                                                path = format!(r#"shell:AppsFolder\{model_id}"#);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -219,9 +224,11 @@ fn get_icon_path(icon_location: PWSTR) -> String {
     let icon_path = decode_wide(unsafe { icon_location.as_wide() });
     let wide_path = encode_wide(icon_path);
     let mut actual_path: [u16; MAX_PATH as _] = [0; MAX_PATH as _];
-    unsafe { SHLoadIndirectString(PCWSTR(wide_path.as_ptr()), &mut actual_path, None).map_err(|e| e.message()) }.unwrap();
-
-    decode_wide(&actual_path)
+    if unsafe { SHLoadIndirectString(PCWSTR(wide_path.as_ptr()), &mut actual_path, None) }.is_ok() {
+        decode_wide(&actual_path)
+    } else {
+        String::new()
+    }
 }
 
 /// Extracts an icon from executable/icon file or an icon stored in a file's associated executable file
@@ -382,7 +389,7 @@ pub fn set_thumbar_buttons<F: Fn(String) + 'static>(window_handle: isize, button
 
     if BUTTONS_ADDED.get().is_none() {
         unsafe { taskbar.ThumbBarAddButtons(hwnd, &thumb_buttons).map_err(|e| e.message()) }?;
-        BUTTONS_ADDED.set(true).unwrap();
+        let _ = BUTTONS_ADDED.set(true);
     } else {
         unsafe { taskbar.ThumbBarUpdateButtons(hwnd, &thumb_buttons).map_err(|e| e.message()) }?;
     }
@@ -405,9 +412,9 @@ fn create_hicon(file_path: &PathBuf) -> Result<HICON, String> {
     let wide = encode_wide(file_path);
     let decoder = unsafe { imaging_factory.CreateDecoderFromFilename(PCWSTR::from_raw(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand).map_err(|e| e.message()) }?;
 
-    let frame = unsafe { decoder.GetFrame(0).unwrap() };
+    let frame = unsafe { decoder.GetFrame(0).map_err(|e| e.message()) }?;
 
-    let converter = unsafe { imaging_factory.CreateFormatConverter().unwrap() };
+    let converter = unsafe { imaging_factory.CreateFormatConverter().map_err(|e| e.message()) }?;
     unsafe { converter.Initialize(&frame, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom).map_err(|e| e.message()) }?;
 
     let mut width = 0;
@@ -510,19 +517,19 @@ pub(crate) fn read_properties<P: AsRef<Path>>(file_path: P) -> HashMap<String, S
 
     let mut result = HashMap::new();
     let wide = encode_wide(file_path.as_ref());
-    let store: IPropertyStore = unsafe { SHGetPropertyStoreFromParsingName(PCWSTR::from_raw(wide.as_ptr()), None, GPS_DEFAULT).unwrap() };
+    if let Ok(store) = unsafe { SHGetPropertyStoreFromParsingName::<_, _, IPropertyStore>(PCWSTR::from_raw(wide.as_ptr()), None, GPS_DEFAULT) } {
+        let count = unsafe { store.GetCount().unwrap_or_default() };
+        for i in 0..count {
+            let mut propkey = PROPERTYKEY::default();
 
-    let count = unsafe { store.GetCount().unwrap() };
-    for i in 0..count {
-        let mut propkey = PROPERTYKEY::default();
-
-        if unsafe { store.GetAt(i, &mut propkey).is_ok() } {
-            if let Ok(propvalue) = unsafe { store.GetValue(&propkey) } {
-                if let Ok(keyname) = unsafe { PSGetNameFromPropertyKey(&propkey) } {
-                    let key = unsafe { keyname.to_string().unwrap().replace("System", "").replace('.', "") };
-                    let value = propvalue.to_string();
-                    result.insert(key, value.to_string());
-                };
+            if unsafe { store.GetAt(i, &mut propkey).is_ok() } {
+                if let Ok(propvalue) = unsafe { store.GetValue(&propkey) } {
+                    if let Ok(keyname) = unsafe { PSGetNameFromPropertyKey(&propkey) } {
+                        let key = unsafe { keyname.to_string().unwrap_or_default().replace("System", "").replace('.', "") };
+                        let value = propvalue.to_string();
+                        result.insert(key, value.to_string());
+                    };
+                }
             }
         }
     }

@@ -5,7 +5,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 use webview2_com::{
-    ExecuteScriptCompletedHandler,
+    take_pwstr, ExecuteScriptCompletedHandler,
     Microsoft::Web::WebView2::Win32::{ICoreWebView2, ICoreWebView2File, ICoreWebView2WebMessageReceivedEventArgs, ICoreWebView2WebMessageReceivedEventArgs2},
     WebMessageReceivedEventHandler,
 };
@@ -88,34 +88,38 @@ pub fn clear() {
 fn drop_handler(webview: Option<ICoreWebView2>, args: Option<ICoreWebView2WebMessageReceivedEventArgs>) -> windows::core::Result<()> {
     if let Some(args) = args {
         let mut webmessageasstring = PWSTR::null();
-        unsafe { args.TryGetWebMessageAsString(&mut webmessageasstring) }?;
+        if unsafe { args.TryGetWebMessageAsString(&mut webmessageasstring) }.is_err() {
+            return Ok(());
+        }
 
-        if unsafe { webmessageasstring.to_string().unwrap() } == "getPathForFiles" {
-            let args2: ICoreWebView2WebMessageReceivedEventArgs2 = args.cast()?;
-            if let Ok(obj) = unsafe { args2.AdditionalObjects() } {
-                let mut count = 0;
-                let mut paths = Vec::new();
-                unsafe { obj.Count(&mut count) }?;
-                for i in 0..count {
-                    let value = unsafe { obj.GetValueAtIndex(i) }?;
-                    if let Ok(file) = value.cast::<ICoreWebView2File>() {
-                        let mut path_ptr = PWSTR::null();
-                        unsafe { file.Path(&mut path_ptr) }?;
-                        let path = unsafe { path_ptr.to_string().unwrap() };
-                        paths.push(path);
+        if take_pwstr(webmessageasstring) == "getPathForFiles" {
+            if let Ok(args2) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() {
+                if let Ok(obj) = unsafe { args2.AdditionalObjects() } {
+                    let mut count = 0;
+                    let mut paths = Vec::new();
+                    let _ = unsafe { obj.Count(&mut count) };
+                    for i in 0..count {
+                        if let Ok(value) = unsafe { obj.GetValueAtIndex(i) } {
+                            if let Ok(file) = value.cast::<ICoreWebView2File>() {
+                                let mut path_ptr = PWSTR::null();
+                                if unsafe { file.Path(&mut path_ptr) }.is_ok() {
+                                    paths.push(take_pwstr(path_ptr));
+                                }
+                            }
+                        }
                     }
-                }
 
-                if paths.is_empty() {
-                    return Ok(());
-                }
+                    if paths.is_empty() {
+                        return Ok(());
+                    }
 
-                if let Some(webview) = webview {
-                    let id: isize = webview.as_raw() as _;
-                    if let Some(handler) = HANDLERS.lock().unwrap().get(&id) {
-                        (handler.callback)(FileDropEvent {
-                            paths,
-                        });
+                    if let Some(webview) = webview {
+                        let id: isize = webview.as_raw() as _;
+                        if let Some(handler) = HANDLERS.lock().unwrap().get(&id) {
+                            (handler.callback)(FileDropEvent {
+                                paths,
+                            });
+                        }
                     }
                 }
             }
