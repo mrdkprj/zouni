@@ -20,7 +20,7 @@ use std::path::Path;
 
 /// Opens the file with the default/associated application
 pub fn open_path<P: AsRef<Path>>(file_path: P) -> Result<(), String> {
-    let uri = format!("file://{}", file_path.as_ref().to_str().unwrap());
+    let uri = format!("file://{}", file_path.as_ref().to_str().unwrap_or_default());
     gtk::gio::AppInfo::launch_default_for_uri(&uri, AppLaunchContext::NONE).map_err(|e| e.message().to_string())
 }
 
@@ -47,7 +47,7 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
 
     let extension = file_path.as_ref().extension().map(|extension| extension.to_string_lossy().to_string());
     let content_type = get_mime_type_fallback(file_path.as_ref())?;
-    let file = File::for_path(file_path.as_ref().to_str().unwrap());
+    let file = File::for_path(file_path.as_ref().to_str().unwrap_or_default());
 
     let dialog = AppChooserDialog::new(gtk::Window::NONE, DialogFlags::DESTROY_WITH_PARENT, &file);
 
@@ -62,7 +62,9 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
     dialog.connect_response(move |dialog, response_type| {
         if response_type == ResponseType::Ok {
             if let Some(app_info) = dialog.app_info() {
-                let _ = app_info.launch(&[dialog.gfile().unwrap()], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
+                if let Some(gfile) = dialog.gfile() {
+                    let _ = app_info.launch(&[gfile], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
+                }
             }
         }
 
@@ -74,8 +76,9 @@ pub fn show_open_with_dialog<P: AsRef<Path>>(file_path: P) -> Result<(), String>
                 } else {
                     let _ = app_info.set_as_default_for_type(&content_type);
                 }
-
-                let _ = app_info.launch(&[dialog.gfile().unwrap()], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
+                if let Some(gfile) = dialog.gfile() {
+                    let _ = app_info.launch(&[gfile], AppLaunchContext::NONE).map_err(|e| e.message().to_string());
+                }
             }
         }
 
@@ -103,16 +106,17 @@ fn to_path_from_gicon(icon: Option<gio::Icon>, size: Option<i32>) -> String {
 }
 
 fn resolve_themed_icon(icon_names: &[GString], size: Option<i32>) -> String {
-    let theme = IconTheme::default().unwrap();
-    let icon_size = if let Some(size) = size {
-        size
-    } else {
-        IconSize::Dialog.into()
-    };
+    if let Some(theme) = IconTheme::default() {
+        let icon_size = if let Some(size) = size {
+            size
+        } else {
+            IconSize::Dialog.into()
+        };
 
-    for icon_name in icon_names {
-        if let Some(path) = theme.lookup_icon(icon_name, icon_size, IconLookupFlags::empty()) {
-            return path.filename().unwrap_or_default().to_string_lossy().to_string();
+        for icon_name in icon_names {
+            if let Some(path) = theme.lookup_icon(icon_name, icon_size, IconLookupFlags::empty()) {
+                return path.filename().unwrap_or_default().to_string_lossy().to_string();
+            }
         }
     }
     String::new()

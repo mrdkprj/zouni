@@ -12,62 +12,63 @@ const ATTRIBUTES_FOR_RECYCLE: &str =
 pub fn list_volumes() -> Result<Vec<Volume>, String> {
     let mut volumes = Vec::new();
     let output = std::process::Command::new("lsblk").args(["-ba", "--json", "-o", "NAME,TYPE,FSTYPE,LABEL,VENDOR,MODEL,SIZE,MOUNTPOINT,FSAVAIL"]).output().map_err(|e| e.to_string())?;
-    let data: Value = serde_json::from_str(std::str::from_utf8(&output.stdout).unwrap()).map_err(|e| e.to_string())?;
-    let drives: Vec<&Value> = data["blockdevices"].as_array().unwrap().iter().filter(|dev| dev["type"].as_str().unwrap_or_default() == "disk").collect();
-    let exclude_mount_points = ["boot", "[SWAP]", "swap"];
+    let data: Value = serde_json::from_str(std::str::from_utf8(&output.stdout).unwrap_or_default()).map_err(|e| e.to_string())?;
+    if let Some(blockdevices) = data["blockdevices"].as_array() {
+        let drives: Vec<&Value> = blockdevices.iter().filter(|dev| dev["type"].as_str().unwrap_or_default() == "disk").collect();
+        let exclude_mount_points = ["boot", "[SWAP]", "swap"];
 
-    for drive in drives {
-        let mut available_units = 0;
-        let mut total_units = 0;
-        let mut mount_point = String::new();
+        for drive in drives {
+            let mut available_units = 0;
+            let mut total_units = 0;
+            let mut mount_point = String::new();
 
-        if drive["children"].is_null() {
-            let drive_mount_point = drive["mountpoint"].as_str().unwrap_or_default();
-            mount_point = drive_mount_point.to_string();
-            total_units += drive["size"].as_u64().unwrap_or_default();
-            available_units += drive["fsavail"].as_u64().unwrap_or_default();
-        } else {
-            for child in drive["children"].as_array().unwrap().iter() {
-                let child_mount_point = child["mountpoint"].as_str().unwrap_or_default();
-                if !exclude_mount_points.iter().any(|p| child_mount_point.contains(p)) {
-                    mount_point = child_mount_point.to_string();
+            if drive["children"].is_null() {
+                let drive_mount_point = drive["mountpoint"].as_str().unwrap_or_default();
+                mount_point = drive_mount_point.to_string();
+                total_units += drive["size"].as_u64().unwrap_or_default();
+                available_units += drive["fsavail"].as_u64().unwrap_or_default();
+            } else {
+                for child in drive["children"].as_array().unwrap_or(&Vec::new()).iter() {
+                    let child_mount_point = child["mountpoint"].as_str().unwrap_or_default();
+                    if !exclude_mount_points.iter().any(|p| child_mount_point.contains(p)) {
+                        mount_point = child_mount_point.to_string();
+                    }
+                    total_units += child["size"].as_u64().unwrap_or_default();
+                    available_units += child["fsavail"].as_u64().unwrap_or_default();
                 }
-                total_units += child["size"].as_u64().unwrap_or_default();
-                available_units += child["fsavail"].as_u64().unwrap_or_default();
             }
-        }
 
-        if mount_point.is_empty() {
-            continue;
-        }
+            if mount_point.is_empty() {
+                continue;
+            }
 
-        if exclude_mount_points.iter().any(|p| mount_point.contains(p)) {
-            continue;
-        }
+            if exclude_mount_points.iter().any(|p| mount_point.contains(p)) {
+                continue;
+            }
 
-        let mut volume_label = if drive["label"].is_null() {
-            String::new()
-        } else {
-            drive["label"].to_string()
-        };
-        volume_label.push_str(if drive["vendor"].is_null() {
-            ""
-        } else {
-            drive["vendor"].as_str().unwrap_or_default()
-        });
-        volume_label.push_str(if drive["model"].is_null() {
-            ""
-        } else {
-            drive["model"].as_str().unwrap_or_default()
-        });
-        volumes.push(Volume {
-            mount_point,
-            volume_label,
-            available_units,
-            total_units,
-        });
+            let mut volume_label = if drive["label"].is_null() {
+                String::new()
+            } else {
+                drive["label"].to_string()
+            };
+            volume_label.push_str(if drive["vendor"].is_null() {
+                ""
+            } else {
+                drive["vendor"].as_str().unwrap_or_default()
+            });
+            volume_label.push_str(if drive["model"].is_null() {
+                ""
+            } else {
+                drive["model"].as_str().unwrap_or_default()
+            });
+            volumes.push(Volume {
+                mount_point,
+                volume_label,
+                available_units,
+                total_units,
+            });
+        }
     }
-
     Ok(volumes)
 }
 
@@ -86,9 +87,9 @@ pub fn readdir<P: AsRef<Path>>(directory: P, recursive: bool, with_mime_type: bo
 }
 
 fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_type: bool) -> Result<&mut Vec<Dirent>, String> {
-    for info in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
+    for info in dir.enumerate_children(ATTRIBUTES, FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).map_err(|e| e.message().to_string())?.flatten() {
         let name = info.name();
-        let mut full_path = dir.path().unwrap().to_path_buf();
+        let mut full_path = dir.path().unwrap_or_default().to_path_buf();
         full_path.push(name.clone());
 
         let full_path_string = full_path.to_string_lossy().to_string();
@@ -106,7 +107,7 @@ fn try_readdir(dir: File, entries: &mut Vec<Dirent>, recursive: bool, with_mime_
 
         entries.push(Dirent {
             name: name.file_name().unwrap_or_default().to_string_lossy().to_string(),
-            parent_path: dir.path().unwrap().to_string_lossy().to_string(),
+            parent_path: dir.path().unwrap_or_default().to_string_lossy().to_string(),
             full_path: full_path_string,
             attributes,
             mime_type,
@@ -173,22 +174,22 @@ pub(crate) fn get_mime_type_fallback<P: AsRef<Path>>(file_path: P) -> Result<Str
         return Ok(String::new());
     }
 
-    let (ctype, _) = gtk::gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap()), &[0]);
+    let (ctype, _) = gtk::gio::content_type_guess(Some(file_path.as_ref().file_name().unwrap_or_default()), &[0]);
     Ok(ctype.to_string())
 }
 
 fn handle_directory<P1: AsRef<Path>, P2: AsRef<Path>>(is_copy: bool, from: P1, to: P2) -> Result<(), String> {
     let source = File::for_path(from.as_ref());
-    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let to_dr = to.as_ref().join(from.as_ref().file_name().unwrap_or_default());
     let dest = File::for_path(&to_dr);
 
     if !dest.query_exists(Cancellable::NONE) {
         dest.make_directory(Cancellable::NONE).map_err(|e| e.message().to_string())?;
-        let settable_attributes = dest.query_settable_attributes(Cancellable::NONE).unwrap();
+        let settable_attributes = dest.query_settable_attributes(Cancellable::NONE).map_err(|e| e.message().to_string())?;
         let attributes_info = settable_attributes.attributes();
         let attributes = attributes_info.iter().map(|a| a.name()).collect::<Vec<&str>>().join(",");
-        let info = source.query_info(&attributes, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
-        dest.set_attributes_from_info(&info, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
+        let info = source.query_info(&attributes, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
+        dest.set_attributes_from_info(&info, FileQueryInfoFlags::NONE, Cancellable::NONE).map_err(|e| e.message().to_string())?;
     }
 
     if let Ok(children) = source.enumerate_children("standard:name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
@@ -210,7 +211,7 @@ fn handle_directory<P1: AsRef<Path>, P2: AsRef<Path>>(is_copy: bool, from: P1, t
 /// Moves an item
 pub fn mv<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let source = File::for_path(from.as_ref());
-    let dest_path = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest_path = to.as_ref().join(from.as_ref().file_name().unwrap_or_default());
     let dest = File::for_path(&dest_path);
 
     if from.as_ref().is_dir() {
@@ -238,7 +239,7 @@ pub fn mv_all_async<P1: AsRef<Path>, P2: AsRef<Path>>(froms: &[P1], to: P2, call
 /// Copies an item
 pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
     let source = File::for_path(from.as_ref());
-    let dest_path = to.as_ref().join(from.as_ref().file_name().unwrap());
+    let dest_path = to.as_ref().join(from.as_ref().file_name().unwrap_or_default());
     let dest = File::for_path(&dest_path);
 
     if from.as_ref().is_dir() {
@@ -344,7 +345,7 @@ pub fn read_recycle_bin() -> Result<Vec<RecycleBinDirent>, String> {
             };
 
             let deleted_date_ms = if let Some(delete_date_string) = info.attribute_as_string("trash::deletion-date") {
-                gtk::glib::DateTime::from_iso8601(&delete_date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix() as u64
+                gtk::glib::DateTime::from_iso8601(&delete_date_string, Some(&gtk::glib::TimeZone::local())).map_err(|e| e.message.to_string())?.to_unix() as u64
             } else {
                 0
             };
@@ -379,13 +380,21 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
                 String::new()
             };
 
-            let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
-            let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
+            if let Some(date_string) = info.attribute_as_string("trash::deletion-date") {
+                let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).map_err(|e| e.message.to_string())?.to_unix();
 
-            if file_paths.contains(&orig_path) {
-                if map.contains_key(&orig_path) {
-                    let trash_data = map.get(&orig_path).unwrap();
-                    if trash_data.date < date {
+                if file_paths.contains(&orig_path) {
+                    if let Some(trash_data) = map.get(&orig_path) {
+                        if trash_data.date < date {
+                            let _ = map.insert(
+                                orig_path,
+                                TrashData {
+                                    date,
+                                    name: info.name().to_string_lossy().to_string(),
+                                },
+                            );
+                        }
+                    } else {
                         let _ = map.insert(
                             orig_path,
                             TrashData {
@@ -394,14 +403,6 @@ pub fn undelete<P: AsRef<Path>>(file_paths: &[P]) -> Result<(), String> {
                             },
                         );
                     }
-                } else {
-                    let _ = map.insert(
-                        orig_path,
-                        TrashData {
-                            date,
-                            name: info.name().to_string_lossy().to_string(),
-                        },
-                    );
                 }
             }
         }
@@ -464,17 +465,18 @@ fn find_items_in_recycle_bin(mut children: FileEnumerator, map: HashMap<String, 
             String::new()
         };
 
-        let date_string = info.attribute_as_string("trash::deletion-date").unwrap();
-        let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).unwrap().to_unix();
+        if let Some(date_string) = info.attribute_as_string("trash::deletion-date") {
+            let date = gtk::glib::DateTime::from_iso8601(&date_string, Some(&gtk::glib::TimeZone::local())).map_err(|e| e.message.to_string())?.to_unix();
 
-        if map.contains_key(&orig_path) && *map.get(&orig_path).unwrap() == date as u64 {
-            let _ = items.insert(
-                orig_path,
-                TrashData {
-                    date,
-                    name: info.name().to_string_lossy().to_string(),
-                },
-            );
+            if map.contains_key(&orig_path) && *map.get(&orig_path).unwrap() == date as u64 {
+                let _ = items.insert(
+                    orig_path,
+                    TrashData {
+                        date,
+                        name: info.name().to_string_lossy().to_string(),
+                    },
+                );
+            }
         }
     }
     Ok(items)
@@ -488,7 +490,7 @@ pub fn empty_recycle_bin(root: Option<String>) -> Result<(), String> {
     if let Ok(mut children) = trash_file.enumerate_children("trash::orig-path,trash::deletion-date,standard::name", FileQueryInfoFlags::NONE, Cancellable::NONE) {
         while let Some(Ok(info)) = children.next() {
             let mut trash_path = String::from(TRASH_PATH_STR);
-            trash_path.push_str(info.name().to_str().unwrap());
+            trash_path.push_str(info.name().to_str().unwrap_or_default());
             File::for_uri(&trash_path).delete(Cancellable::NONE).map_err(|e| e.message().to_string())?;
         }
     }
@@ -565,7 +567,7 @@ pub fn get_item_count<P: AsRef<Path>>(dir_path: P) -> Result<(u32, u32), String>
 
     let dir = File::for_path(dir_path.as_ref());
 
-    for info in dir.enumerate_children("", FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).unwrap().flatten() {
+    for info in dir.enumerate_children("", FileQueryInfoFlags::NOFOLLOW_SYMLINKS, Cancellable::NONE).map_err(|e| e.message().to_string())?.flatten() {
         if info.file_type() == FileType::Directory {
             dir_count += 1;
         } else {

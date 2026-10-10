@@ -83,7 +83,7 @@ where
                 break;
             }
 
-            let _ = tx.send(OperationStatus::Start(from.file_name().unwrap().to_string_lossy().to_string())).await;
+            let _ = tx.send(OperationStatus::Start(from.file_name().unwrap_or_default().to_string_lossy().to_string())).await;
 
             match operation {
                 FileOperation::Copy => execute_copy(from, to.clone(), &ref_cancellable, &tx, &confirm_rx).await,
@@ -162,7 +162,7 @@ async fn run_with_cancellable<F, T>(
 
 async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, parent: Option<PathBuf>, confirm_rx: &Receiver<Response>) {
     let source = File::for_path(&from);
-    let dest_path = to.join(from.file_name().unwrap());
+    let dest_path = to.join(from.file_name().unwrap_or_default());
     let dest = File::for_path(&dest_path);
 
     // The native implementation may support moving directories (for instance on moves inside the same filesystem), but the fallback code does not.
@@ -188,7 +188,7 @@ async fn execute_move(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
 
 async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx: &Sender<OperationStatus>, confirm_rx: &Receiver<Response>) {
     let source = File::for_path(&from);
-    let dest_path = to.join(from.file_name().unwrap());
+    let dest_path = to.join(from.file_name().unwrap_or_default());
     let dest = File::for_path(&dest_path);
 
     // Can not handle recursive copies of directories
@@ -214,7 +214,7 @@ async fn execute_copy(from: PathBuf, to: PathBuf, cancellable: &Cancellable, tx:
 
 async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable: &Cancellable, sender: &Sender<OperationStatus>, confirm_rx: &Receiver<Response>) {
     let source = File::for_path(&from);
-    let to_dr = to.join(from.file_name().unwrap());
+    let to_dr = to.join(from.file_name().unwrap_or_default());
     let dest = File::for_path(&to_dr);
 
     if !dest.query_exists(Cancellable::NONE) {
@@ -225,11 +225,13 @@ async fn handle_directory(is_copy: bool, from: PathBuf, to: PathBuf, cancellable
             }
         };
 
-        let settable_attributes = dest.query_settable_attributes(Cancellable::NONE).unwrap();
-        let attributes_info = settable_attributes.attributes();
-        let attributes = attributes_info.iter().map(|a| a.name()).collect::<Vec<&str>>().join(",");
-        let info = source.query_info(&attributes, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
-        dest.set_attributes_from_info(&info, FileQueryInfoFlags::NONE, Cancellable::NONE).unwrap();
+        if let Ok(settable_attributes) = dest.query_settable_attributes(Cancellable::NONE) {
+            let attributes_info = settable_attributes.attributes();
+            let attributes = attributes_info.iter().map(|a| a.name()).collect::<Vec<&str>>().join(",");
+            if let Ok(info) = source.query_info(&attributes, FileQueryInfoFlags::NONE, Cancellable::NONE) {
+                let _ = dest.set_attributes_from_info(&info, FileQueryInfoFlags::NONE, Cancellable::NONE);
+            }
+        }
     }
 
     if let Ok(mut children) = source.enumerate_children("standard:name", FileQueryInfoFlags::NONE, Cancellable::NONE) {

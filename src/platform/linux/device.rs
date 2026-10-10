@@ -46,17 +46,21 @@ fn get_class_name(interfaces: Interfaces) -> String {
 
 impl<T: UsbContext> rusb::Hotplug<T> for HotPlugHandler {
     fn device_arrived(&mut self, device: Device<T>) {
-        (self.callback)(DeviceEvent {
-            name: get_class_name(device.active_config_descriptor().unwrap().interfaces()),
-            event: "Added".to_string(),
-        });
+        if let Ok(descriptor) = device.active_config_descriptor() {
+            (self.callback)(DeviceEvent {
+                name: get_class_name(descriptor.interfaces()),
+                event: "Added".to_string(),
+            });
+        }
     }
 
     fn device_left(&mut self, device: Device<T>) {
-        (self.callback)(DeviceEvent {
-            name: get_class_name(device.config_descriptor(0).unwrap().interfaces()),
-            event: "Removed".to_string(),
-        });
+        if let Ok(descriptor) = device.config_descriptor(0) {
+            (self.callback)(DeviceEvent {
+                name: get_class_name(descriptor.interfaces()),
+                event: "Removed".to_string(),
+            });
+        }
     }
 }
 
@@ -97,7 +101,7 @@ pub fn listen<F: FnMut(DeviceEvent) + 'static + Send>(callback: F) -> bool {
 
                 if let Ok(listener) = LISTENER.try_lock() {
                     if let Some(context) = &listener.context {
-                        context.handle_events(Some(Duration::from_millis(10))).unwrap();
+                        let _ = context.handle_events(Some(Duration::from_millis(10)));
                     }
                 }
             });
@@ -111,9 +115,11 @@ pub fn listen<F: FnMut(DeviceEvent) + 'static + Send>(callback: F) -> bool {
 
 fn drop_context() {
     if let Ok(mut con) = LISTENER.lock() {
-        let context = con.context.take().unwrap();
-        let registration = con.registration.take().unwrap();
-        context.unregister_callback(registration);
+        if let Some(context) = con.context.take() {
+            if let Some(registration) = con.registration.take() {
+                context.unregister_callback(registration);
+            }
+        }
     }
 }
 
