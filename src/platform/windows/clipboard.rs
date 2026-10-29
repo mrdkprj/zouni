@@ -2,10 +2,11 @@ use super::util::{decode_wide, encode_wide, GlobalMemory};
 use crate::{ClipboardData, Operation};
 use windows::Win32::{
     Foundation::{HANDLE, HGLOBAL, HWND},
+    Graphics::Gdi::{BITMAPINFOHEADER, BI_RGB},
     System::{
         DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData},
         Memory::{GlobalLock, GlobalUnlock},
-        Ole::{CF_HDROP, CF_TEXT, CF_UNICODETEXT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
+        Ole::{CF_DIB, CF_HDROP, CF_TEXT, CF_UNICODETEXT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE},
     },
     UI::Shell::{DragQueryFileW, CFSTR_PREFERREDDROPEFFECT, DROPFILES, HDROP},
 };
@@ -91,11 +92,7 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
         return Err("Failed to write clipboard".to_string());
     }
 
-    unsafe { CloseClipboard().map_err(|e| e.message()) }?;
-
-    std::mem::forget(hglobal);
-
-    Ok(())
+    unsafe { CloseClipboard().map_err(|e| e.message()) }
 }
 
 /// Checks if URIs are available
@@ -219,12 +216,7 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
         return Err("Failed to write clipboard format".to_string());
     }
 
-    std::mem::forget(hglobal);
-    std::mem::forget(hglobal_operation);
-
-    unsafe { CloseClipboard().map_err(|e| e.message()) }?;
-
-    Ok(())
+    unsafe { CloseClipboard().map_err(|e| e.message()) }
 }
 
 fn get_preferred_drop_effect() -> Operation {
@@ -254,4 +246,62 @@ fn get_preferred_drop_effect() -> Operation {
     }
 
     Operation::None
+}
+
+/// Copies an image buffer to the clipboard as CF_DIB.
+pub fn write_image(window_handle: isize, file_path: String) -> Result<(), String> {
+    let img = image::open(&file_path).map_err(|e| e.to_string())?;
+
+    let width = img.width();
+    let height = img.height();
+    let rgba_img = img.to_rgba8();
+
+    let mut bgra_data = Vec::with_capacity((width * height * 4) as usize);
+    for y in (0..height).rev() {
+        for x in 0..width {
+            let pixel = rgba_img.get_pixel(x, y);
+            bgra_data.push(pixel[2]); // Blue
+            bgra_data.push(pixel[1]); // Green
+            bgra_data.push(pixel[0]); // Red
+            bgra_data.push(pixel[3]); // Alpha
+        }
+    }
+
+    let header_size = size_of::<BITMAPINFOHEADER>() as u32;
+    let image_size = bgra_data.len() as u32;
+    let total_size = (header_size + image_size) as usize;
+
+    let hglobal = GlobalMemory::new(total_size)?;
+
+    let ptr = hglobal.lock()?;
+
+    let header = BITMAPINFOHEADER {
+        biSize: header_size,
+        biWidth: width as i32,
+        biHeight: height as i32, // Positive value dictates a bottom-up DIB
+        biPlanes: 1,
+        biBitCount: 32,          // 32-bit BGRA
+        biCompression: BI_RGB.0, // BI_RGB (no compression)
+        biSizeImage: image_size,
+        biXPelsPerMeter: 0,
+        biYPelsPerMeter: 0,
+        biClrUsed: 0,
+        biClrImportant: 0,
+    };
+
+    // Copy header and pixel data into the global memory pointer
+    unsafe { std::ptr::copy_nonoverlapping(&header as *const BITMAPINFOHEADER as *const u8, ptr, header_size as usize) };
+    unsafe { std::ptr::copy_nonoverlapping(bgra_data.as_ptr(), ptr.add(header_size as usize), image_size as usize) };
+
+    hglobal.unlock();
+
+    unsafe { OpenClipboard(Some(HWND(window_handle as _))).map_err(|e| e.message()) }?;
+    unsafe { EmptyClipboard().map_err(|e| e.message()) }?;
+
+    if unsafe { SetClipboardData(CF_DIB.0 as u32, Some(HANDLE(hglobal.handle().0))) }.is_err() {
+        unsafe { CloseClipboard().map_err(|e| e.message()) }?;
+        return Err("Failed to write clipboard".to_string());
+    }
+
+    unsafe { CloseClipboard().map_err(|e| e.message()) }
 }
