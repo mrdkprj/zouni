@@ -92,6 +92,8 @@ pub fn write_text(window_handle: isize, text: String) -> Result<(), String> {
         return Err("Failed to write clipboard".to_string());
     }
 
+    std::mem::forget(hglobal);
+
     unsafe { CloseClipboard().map_err(|e| e.message()) }
 }
 
@@ -216,6 +218,9 @@ pub fn write_uris(window_handle: isize, paths: &[String], operation: Operation) 
         return Err("Failed to write clipboard format".to_string());
     }
 
+    std::mem::forget(hglobal);
+    std::mem::forget(hglobal_operation);
+
     unsafe { CloseClipboard().map_err(|e| e.message()) }
 }
 
@@ -302,6 +307,8 @@ pub fn write_image(window_handle: isize, file_path: String) -> Result<(), String
         unsafe { CloseClipboard().map_err(|e| e.message()) }?;
         return Err("Failed to write clipboard".to_string());
     }
+
+    std::mem::forget(hglobal);
 
     unsafe { CloseClipboard().map_err(|e| e.message()) }
 }
