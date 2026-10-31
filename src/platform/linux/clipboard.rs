@@ -121,3 +121,28 @@ pub fn write_uris(_window_handle: isize, paths: &[String], operation: Operation)
 
     Ok(())
 }
+
+/// Copies an image buffer to the clipboard.
+///
+/// `window_handle` is ignored
+pub fn write_image(_window_handle: isize, file_path: String) -> Result<(), String> {
+    init();
+
+    let clipboard = gtk::Clipboard::get(&SELECTION_CLIPBOARD);
+
+    let targets = vec![TargetEntry::new("image/png", TargetFlags::empty(), 0), TargetEntry::new("image/jpeg", TargetFlags::empty(), 0)];
+
+    let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_file(file_path).map_err(|e| e.to_string())?;
+
+    let _ = clipboard.set_with_data(&targets, move |_, selection, _| match selection.target().name().as_str() {
+        "image/png" | "image/jpeg" => {
+            selection.set_pixbuf(&pixbuf);
+        }
+        _ => {}
+    });
+
+    // Stores the current clipboard data somewhere so that it will stay around after the application has quit.
+    clipboard.store();
+
+    Ok(())
+}

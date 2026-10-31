@@ -445,7 +445,7 @@ pub fn delete_from_recycle_bin(targets: &[RecycleBinItem]) -> Result<(), String>
         let args: HashMap<String, u64> = targets.iter().map(|target| (target.original_path.clone(), target.deleted_time_ms)).collect();
         let map = find_items_in_recycle_bin(children, args)?;
 
-        for (_, trash_data) in map.iter() {
+        for trash_data in map.values() {
             let mut trash_path = String::from(TRASH_PATH_STR);
             trash_path.push_str(&trash_data.name);
 
