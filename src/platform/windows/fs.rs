@@ -3,9 +3,13 @@ use super::{
     util::{decode_wide, encode_wide, prefixed, ComGuard},
 };
 use crate::{Dirent, FileAttribute, RecycleBinDirent, RecycleBinItem, Volume};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 use windows::{
-    core::{Interface, PCSTR, PCWSTR},
+    core::{implement, Interface, Ref, Result as WinResult, HRESULT, PCSTR, PCWSTR},
     Wdk::Storage::FileSystem::{FileDirectoryInformation, NtQueryDirectoryFile, FILE_DIRECTORY_INFORMATION},
     Win32::{
         Foundation::{CloseHandle, FILETIME, HANDLE, HWND, MAX_PATH, PROPERTYKEY, S_OK},
@@ -21,10 +25,10 @@ use windows::{
         },
         UI::Shell::{
             Common::{ITEMIDLIST, STRRET},
-            FMTID_Storage, FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IShellFolder, IShellFolder2, IShellItem, IShellItemArray, IShellLinkW,
-            SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHEmptyRecycleBinW, SHGetDataFromIDListW, SHGetDesktopFolder, SHGetKnownFolderIDList, SHParseDisplayName, ShellLink,
-            CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE, PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS,
-            SHGDFIL_FINDDATA, SHGDN_NORMAL, SLGP_UNCPRIORITY,
+            FMTID_Storage, FOLDERID_RecycleBinFolder, FileOperation, IContextMenu, IEnumIDList, IFileOperation, IFileOperationProgressSink, IFileOperationProgressSink_Impl, IShellFolder,
+            IShellFolder2, IShellItem, IShellItemArray, IShellLinkW, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHEmptyRecycleBinW, SHGetDataFromIDListW, SHGetDesktopFolder,
+            SHGetKnownFolderIDList, SHParseDisplayName, ShellLink, CMINVOKECOMMANDINFO, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_RENAMEONCOLLISION, KF_FLAG_DEFAULT, PID_DISPLACED_DATE,
+            PSGUID_DISPLACED, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDFIL_FINDDATA, SHGDN_NORMAL, SIGDN_FILESYSPATH, SLGP_UNCPRIORITY,
         },
     },
 };
@@ -333,7 +337,7 @@ pub fn mv_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(
 }
 
 /// Copies an item
-pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), String> {
+pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<Vec<String>, String> {
     let _guard = ComGuard::new();
 
     let from_wide = encode_wide(from.as_ref());
@@ -348,11 +352,11 @@ pub fn copy<P1: AsRef<Path>, P2: AsRef<Path>>(from: P1, to: P2) -> Result<(), St
         unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
     }
     unsafe { op.CopyItem(&from_item, &to_item, None, None).map_err(|e| e.message()) }?;
-    execute(op)
+    execute_copy(op)
 }
 
 /// Copies multiple items
-pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<(), String> {
+pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result<Vec<String>, String> {
     let _guard = ComGuard::new();
 
     let from_item_array = get_id_lists(from)?;
@@ -367,7 +371,7 @@ pub fn copy_all<P1: AsRef<Path>, P2: AsRef<Path>>(from: &[P1], to: P2) -> Result
         unsafe { op.SetOperationFlags(FOF_ALLOWUNDO).map_err(|e| e.message()) }?;
     }
     unsafe { op.CopyItems(&from_item_array, &to_item).map_err(|e| e.message()) }?;
-    execute(op)
+    execute_copy(op)
 }
 
 /// Deletes an item
@@ -451,6 +455,147 @@ fn execute(op: IFileOperation) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn execute_copy(op: IFileOperation) -> Result<Vec<String>, String> {
+    let copied = Arc::new(Mutex::new(Vec::<String>::new()));
+
+    let sink: IFileOperationProgressSink = CopySink {
+        copied: copied.clone(),
+    }
+    .into();
+
+    unsafe { op.Advise(&sink).map_err(|e| e.message()) }?;
+
+    let result = unsafe { op.PerformOperations() };
+
+    let paths = copied.lock().unwrap().to_vec();
+
+    if result.is_err() {
+        if unsafe { op.GetAnyOperationsAborted().map_err(|e| e.message()) }?.as_bool() {
+            return Ok(paths);
+        } else {
+            return Err(result.map_err(|e| e.message()).unwrap_err());
+        }
+    }
+
+    Ok(paths)
+}
+
+#[implement(IFileOperationProgressSink)]
+struct CopySink {
+    copied: Arc<Mutex<Vec<String>>>,
+}
+
+impl IFileOperationProgressSink_Impl for CopySink_Impl {
+    fn PostCopyItem(
+        &self,
+        _dwflags: u32,
+        _psiitem: Ref<'_, IShellItem>,
+        _psidestinationfolder: Ref<'_, IShellItem>,
+        _psznewname: &PCWSTR,
+        _hrcopy: HRESULT,
+        psinewlycreated: Ref<'_, IShellItem>,
+    ) -> WinResult<()> {
+        /* Get the actual created item's full path. */
+        if let Some(created) = psinewlycreated.as_ref() {
+            let path = unsafe { created.GetDisplayName(SIGDN_FILESYSPATH) }?;
+            let path = unsafe { path.to_string()? };
+
+            self.copied.lock().unwrap().push(path);
+        }
+
+        Ok(())
+    }
+
+    fn StartOperations(&self) -> WinResult<()> {
+        Ok(())
+    }
+    fn FinishOperations(&self, _hrcompletion: HRESULT) -> WinResult<()> {
+        Ok(())
+    }
+    fn UpdateProgress(&self, _uworkdone: u32, _utotalwork: u32) -> WinResult<()> {
+        Ok(())
+    }
+    fn PreCopyItem(
+        &self,
+        _dwflags: u32,
+        _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psidestinationfolder: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psznewname: &windows::core::PCWSTR,
+    ) -> WinResult<()> {
+        Ok(())
+    }
+
+    fn PreMoveItem(
+        &self,
+        _dwflags: u32,
+        _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psidestinationfolder: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psznewname: &windows::core::PCWSTR,
+    ) -> WinResult<()> {
+        Ok(())
+    }
+    fn PostMoveItem(
+        &self,
+        _dwflags: u32,
+        _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psidestinationfolder: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psznewname: &windows::core::PCWSTR,
+        _hrmove: HRESULT,
+        _psinewitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+    ) -> WinResult<()> {
+        Ok(())
+    }
+    fn PreDeleteItem(&self, _dwflags: u32, _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>) -> WinResult<()> {
+        Ok(())
+    }
+    fn PostDeleteItem(
+        &self,
+        _dwflags: u32,
+        _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _hrdelete: HRESULT,
+        _psideleteditem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+    ) -> WinResult<()> {
+        Ok(())
+    }
+    fn PreRenameItem(&self, _dwflags: u32, _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>, _psznewname: &windows::core::PCWSTR) -> WinResult<()> {
+        Ok(())
+    }
+    fn PostRenameItem(
+        &self,
+        _dwflags: u32,
+        _psiitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psznewname: &windows::core::PCWSTR,
+        _hrrename: HRESULT,
+        _psinewitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+    ) -> WinResult<()> {
+        Ok(())
+    }
+    fn PreNewItem(&self, _dwflags: u32, _psidestinationfolder: Ref<'_, windows::Win32::UI::Shell::IShellItem>, _psznewname: &windows::core::PCWSTR) -> WinResult<()> {
+        Ok(())
+    }
+    fn PostNewItem(
+        &self,
+        _dwflags: u32,
+        _psidestinationfolder: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+        _psznewname: &windows::core::PCWSTR,
+        _psztemplatename: &windows::core::PCWSTR,
+        _dwfileattributes: u32,
+        _hrnewitem: HRESULT,
+        _psinewitem: Ref<'_, windows::Win32::UI::Shell::IShellItem>,
+    ) -> WinResult<()> {
+        Ok(())
+    }
+    fn PauseTimer(&self) -> WinResult<()> {
+        Ok(())
+    }
+    fn ResetTimer(&self) -> WinResult<()> {
+        Ok(())
+    }
+    fn ResumeTimer(&self) -> WinResult<()> {
+        Ok(())
+    }
 }
 
 const PKEY_SIZE: PROPERTYKEY = PROPERTYKEY {
